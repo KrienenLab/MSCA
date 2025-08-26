@@ -37,11 +37,10 @@ In each of the h5ad, you will find metadata columns named `['cluster_id', 'Neigh
 *This is the same data as the subcortical cell atlas, but subsetted to manually selected basal ganglia and then mapped to the marmoset BG RNA reference with the consensus taxonomy
 
 ## Code Availability
-- Basic RNA data exploration: 
-- Cross-species integration example:
+- Basic RNA data exploration: `MSCA/tutorial/explore_subcortical_data.ipynb`
+- Cross-species integration example: `/jukebox/krienen/aibs_fileshare/241018_RE_AWS_bucket_for_HMBA_attachment/HMBA/align_hmba_marmoset_macaque_human.py`
 
 ### Utils
-- Explore data: `MSCA/tutorial/explore_subcortical_data.ipynb`
 - Make metacells (pseudobulk): `/jukebox/krienen/marm_hmba_integration/250414_preprocess_br_pxr_250220_1/analysis/code/util/metacell`
 - Mapmycells Example Pipeline: 
 
