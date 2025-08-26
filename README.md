@@ -14,6 +14,8 @@ Understanding the cellular composition and gene regulatory landscape of the huma
 
   This is work in progress and updated regularly. Relevant columns are `['Subcortex_Class_v4', 'Subcortex_Group_v4']`. 
 - ATAC: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/atac/atac_count_matrix`
+- Spatial transcriptoimcs: `/jukebox/krienen/aibs_fileshare/hmba-marmoset-wg-802451596237-us-west-2/Subcortex/spatial/20250711`
+  - `...all_cells.h5ad` contains the entire hemisphere; `...subcortex.h5ad` contains the hand drawn subcortical cells. 
 
 ### Cross Species Basal Ganglia Atlas
 
@@ -30,12 +32,16 @@ In each of the h5ad, you will find metadata columns named `['cluster_id', 'Neigh
 #### ATAC
 - master folder: `/jukebox/krienen/aibs_fileshare/hmba-bican-sharing-802451596237-us-west-2/BasalGanglia_pre-print_ATAC`
 
+#### Spatial Transcriptomics (Xenium)
+- master folder: `/jukebox/krienen/aibs_fileshare/hmba-marmoset-wg-802451596237-us-west-2/spatial/for_data_and_tech_handoff/20250617_for_release/20250617_h5ad` contains the data and a .md file that explains all the metadata columns.
+*This is the same data as the subcortical cell atlas, but subsetted to manually selected basal ganglia and then mapped to the marmoset BG RNA reference with the consensus taxonomy
 
 ## Code Availability
 - Basic RNA data exploration: 
 - Cross-species integration example:
 
 ### Utils
-- Mapmycells Example Pipeline:
-- Make metacells (pseudobulk):
-- 
+- Explore data: `MSCA/tutorial/explore_subcortical_data.ipynb`
+- Make metacells (pseudobulk): `/jukebox/krienen/marm_hmba_integration/250414_preprocess_br_pxr_250220_1/analysis/code/util/metacell`
+- Mapmycells Example Pipeline: 
+
