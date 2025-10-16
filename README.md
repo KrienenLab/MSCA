@@ -7,15 +7,20 @@ Understanding the cellular composition and gene regulatory landscape of the huma
 ## Data Avilability
 
 ### Marmoset Subcortical Cell Atlas
-- RNA: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/rna_clean_0715.h5ad`
+
+- **RNA**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/rna_clean_0715.h5ad`
 
   The most granular annotation level is stored as `Cluster_v4` and all annotation levels above are aggregated clusters. 
-- Cluster annotation: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/subcortex_anno_table.csv`
+- **Cluster annotation**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/subcortex_anno_table.csv`
 
   This is work in progress and updated regularly. Relevant columns are `['Subcortex_Class_v4', 'Subcortex_Group_v4']`. 
-- ATAC: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/atac/atac_count_matrix`
-- Spatial transcriptoimcs: `/jukebox/krienen/aibs_fileshare/hmba-marmoset-wg-802451596237-us-west-2/Subcortex/spatial/20250711`
-  - `...all_cells.h5ad` contains the entire hemisphere; `...subcortex.h5ad` contains the hand drawn subcortical cells. 
+- **ATAC**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/atac/atac_count_matrix`
+- **Spatial transcriptoimcs**: `/Volumes/krienen/data/MSCA/Spatial`
+  - `...subcortex.h5ad` contains the hand drawn subcortical cells; other files without the subcortex name contain the full hemisphere.
+    *Note: the spatial gene panel only contains 300 genes, designed to optimize for transcriptomic diversity in the basal ganglia. Clusters outside of the basal ganglia might be messy*
+ 
+- *Interactively Viewing RNA and/or Spatial data*: Please navigate to this file `/jukebox/krienen/data/MSCA/readme.txt` for instruction on connecting to cirro servers hosted on scotty. 
+  
 
 ### Cross Species Basal Ganglia Atlas
 
