@@ -15,8 +15,8 @@ Understanding the cellular composition and gene regulatory landscape of the huma
 
   This is work in progress and updated regularly. Relevant columns are `['Subcortex_Class_v4', 'Subcortex_Group_v4']`. 
 - **ATAC**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/atac/atac_count_matrix`
-- **Spatial transcriptoimcs**: `/Volumes/krienen/data/MSCA/Spatial`
-  - `...subcortex.h5ad` contains the hand drawn subcortical cells; other files without the subcortex name contain the full hemisphere.
+- **Spatial transcriptoimcs**: `/jukebox/krienen/data/MSCA/Spatial`
+  - `...subcortex.h5ad` contains the hand drawn subcortical cells; other files without the subcortex name contain the full hemisphere； within the files, `Cluster_v4_name` or `CDM_Cluster_v4_label` corresponds to the mapped RNA `Cluster_v4` identity (through MapMyCells Flat)
     *Note: the spatial gene panel only contains 300 genes, designed to optimize for transcriptomic diversity in the basal ganglia. Clusters outside of the basal ganglia might be messy*
  
 - *Interactively Viewing RNA and/or Spatial data*: Please navigate to this file `/jukebox/krienen/data/MSCA/readme.txt` for instruction on connecting to cirro servers hosted on scotty. 
