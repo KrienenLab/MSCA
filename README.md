@@ -11,7 +11,8 @@ Understanding the cellular composition and gene regulatory landscape of the huma
 - **RNA**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/rna_clean_0715.h5ad`
 
   The most granular annotation level is stored as `Cluster_v4` and all annotation levels above are aggregated clusters. 
-- **Cluster annotation**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/subcortex_anno_table.csv`
+- **Cluster annotation**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/subcortex_anno_table_20251019.csv`
+  - **Oct 25, 2025 update**: preprint taxonomy frozen and stored as `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/preprint_freeze/subcortex_anno_table_preprint.csv`
 
   This is work in progress and updated regularly. Relevant columns are `['Subcortex_Class_v4', 'Subcortex_Group_v4']`. 
 - **ATAC**: `/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/atac/atac_count_matrix`
