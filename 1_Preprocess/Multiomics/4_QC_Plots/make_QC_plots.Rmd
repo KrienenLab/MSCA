@@ -1,0 +1,675 @@
+---
+title: "make_QC_plots"
+output: html_document
+date: "2025-11-06"
+---
+
+Plots to make --
+
+RNA:
+- UMIs per cell (neurons and glia)
+- Genes per cell (neurons and glia)
+- Percent mitochondrial (neurons and glia)
+- (Maybe doublet rates?) (cell curation)
+- UMIs per Class/Group/Cluster
+
+ATAC:
+- UMIs per cell (neurons and glia)
+- FRiP, TSS enrichment, nucleosomal ratio *[PYTHON]*
+- ATAC fragment size distributions (per library, lineplot mean with quantiles shaded)
+- ATAC metagene at TSSes (if I have time, but that's my thing so)
+
+# Env
+
+```{r}
+# probably not using most of these
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    library(circlize)
+    library(RColorBrewer)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+    library(viridisLite)
+})
+
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        plot.title  = element_text(hjust = 0.5, face = "bold", size = 8),
+        axis.title  = element_text(color = "black", size = 6),
+        axis.text   = element_text(color = "black", size = 6),
+        axis.ticks  = element_line(color = "black"),
+        legend.text = element_text(size = 6),
+        strip.text  = element_text(size = 8),
+        strip.background = element_blank(),
+        complete = TRUE
+    )
+}
+```
+
+## Paths
+
+```{r}
+pdir <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster"
+path_cellr_summary <- file.path(pdir, "metadata/cellranger-arc_summary.csv")
+path_cur_stats     <- file.path(pdir, "metadata/cell_curation_stats.csv")
+path_qc_table      <- file.path(pdir, "qc/library_qc_pass_fail_table.csv")
+path_rna_cmeta     <- file.path(pdir, "data/rna/rna_clean_0715_cell_metadata.csv")
+path_atac_cmeta    <- file.path(pdir, "data/atac/atac_cell_meta.csv")
+path_anno          <- file.path(pdir, "metadata/preprint_freeze/subcortex_anno_table_preprint.csv")
+```
+
+```{r}
+outdir <- file.path(pdir, "qc/plots")
+if (!dir.exists(outdir))
+    dir.create(outdir)
+
+if (!dir.exists(outdir, "curated"))
+    dir.create(file.path(outdir, "curated"))
+
+if (!dir.exists(outdir, "cellranger"))
+    dir.create(file.path(outdir, "cellranger"))
+```
+
+## Imports
+
+```{r}
+cellr_summary <- read.csv(path_cellr_summary)
+cur_stats     <- read.csv(path_cur_stats)
+qc_table      <- read.csv(path_qc_table)
+rna_cmeta     <- read.csv(path_rna_cmeta, row.names = "X")
+atac_cmeta    <- read.csv(path_atac_cmeta, row.names = "index")
+anno          <- read.csv(path_anno, row.names = "marm_cluster_id")
+```
+
+fragment size distribution data from multiqc:
+
+```{r}
+atac_ins_sizes <- read.delim(file.path(pdir, "qc/multiqc_data/mqc_atac_insert_size_plot.txt"))
+
+# import like tuples (x,y value pairs with just numbered columns)
+atac_ins_sizes <- atac_ins_sizes %>%
+    tidyr::pivot_longer(-Sample, names_to = "col", values_to = "pair") %>%
+    # Remove parentheses and split into two numeric columns
+    mutate(
+        pair = gsub("[()]", "", pair),
+        insert_size = as.numeric(sub(",.*", "", pair)),
+        count = as.numeric(sub(".*,", "", pair))
+    ) %>%
+    select(Sample, insert_size, count)
+```
+
+
+```{r}
+### NOT USED
+# Also, ATAC reads in consensus peaks by cluster:
+# atac_reads_peaks <- read.csv(
+#     file.path(pdir, "qc/data/atac_reads_in_consensus_peaks_by_cluster.csv")
+# )
+```
+
+## Drop remaining Junk
+
+Most is already gone so this is appropriate. The QC will basically show what's
+curated in the library (the cellranger summary etc. will take care of earlier
+steps)
+
+```{r}
+# > nrow(rna_cmeta)
+# [1] 681571
+```
+
+That's 681571 cells. Manuscript says 678917 cells.
+
+```{r}
+# > all(rna_cmeta$Cluster_v4 %in% rownames(anno))
+# [1] TRUE
+# > sum(anno[rna_cmeta$Cluster_v4, "Subcortex_Class_v4"] != "Junk")
+# [1] 678917
+
+### that's it. remaining Junk can be seen in anno table
+```
+
+```{r}
+# > nrow(anno)
+# [1] 1811
+anno <- subset(anno, Subcortex_Class_v4 != "Junk")
+# > nrow(anno)
+# [1] 1737
+```
+
+```{r}
+rna_cmeta <- rna_cmeta[rna_cmeta$Cluster_v4 %in% rownames(anno), ]
+# > nrow(rna_cmeta)
+# [1] 678917
+```
+
+ATAC is a subset anyway:
+
+```{r}
+# > nrow(atac_cmeta)
+# [1] 651082
+atac_cmeta <- atac_cmeta[rownames(atac_cmeta) %in% rownames(rna_cmeta), ]
+# > nrow(atac_cmeta)
+# [1] 632920
+```
+
+
+## Join anno table into cell metadata
+
+### RNA
+
+Makes things a little easier.
+
+```{r}
+# > colnames(rna_cmeta)
+#  [1] "barcoded_cell_sample_name"                 "tissue_name"                              
+#  [3] "dissociated_cell_sample_name"              "donor_name"                               
+#  [5] "mit_name"                                  "sample_name"                              
+#  [7] "donor_slab_tile"                           "hemisphere"                               
+#  [9] "alignment_job_id"                          "nCount_RNA"                               
+# [11] "nFeature_RNA"                              "percent.mt"                               
+# [13] "percent.Rpl"                               "percent.Hbb"                              
+# [15] "scDblFinder.class"                         "scDblFinder.score"                        
+# [17] "scDblFinder.weighted"                      "scDblFinder.cxds_score"                   
+# [19] "S.Score"                                   "G2M.Score"                                
+# [21] "Phase"                                     "old_barcode"                              
+# [23] "ABCmouse_MapMyCells_CLAS_label"            "ABCmouse_MapMyCells_SUBC_label"           
+# [25] "ABCmouse_MapMyCells_CLUS_label"            "Siletti_MapMyCells_Supercluster_label"    
+# [27] "Siletti_MapMyCells_Cluster_label"          "Siletti.reannot_MapMyCells_Class_label"   
+# [29] "Siletti.reannot_MapMyCells_Subclass_label" "Siletti.reannot_MapMyCells_Cluster_label" 
+# [31] "Cluster_v4"                                "Cluster_v3"                               
+# [33] "Subcortex_Class_v4"                        "Subcortex_Group_v4"    
+
+# > colnames(anno)
+#  [1] "Subcortex_Class_v4"                  "Subcortex_Group_v4"                  "Cluster_v4_size"                    
+#  [4] "Cluster_NT"                          "Figure_Panel"                        "Panel_sections"                     
+#  [7] "Panel_Purpose"                       "Subcortex_color_hex_cluster"         "Subcortex_color_hex_cluster_display"
+# [10] "preprint_analysis_include"           "Subcortex_Class_v4_BG"               "Cluster_Dominant_Region"            
+# [13] "Group_Dominant_Region"               "Group_NT" 
+```
+
+```{r}
+# > names(rna_cmeta)[names(rna_cmeta) %in% names(anno)]
+# [1] "Subcortex_Class_v4" "Subcortex_Group_v4"
+
+rna_cmeta[names(rna_cmeta) %in% names(anno)] <- NULL
+```
+
+```{r}
+rna_cmeta <- cbind(rna_cmeta, anno[rna_cmeta$Cluster_v4, ])
+```
+
+### ATAC
+
+```{r}
+# > names(atac_cmeta)[names(atac_cmeta) %in% names(anno)]
+# [1] "Subcortex_Class_v4" "Subcortex_Group_v4"
+
+atac_cmeta[names(atac_cmeta) %in% names(anno)] <- NULL
+```
+
+```{r}
+atac_cmeta <- cbind(atac_cmeta, anno[atac_cmeta$Cluster_v4, ])
+```
+
+
+## Add a neuron/glia column
+
+```{r}
+rna_cmeta <- mutate(
+    rna_cmeta,
+    neur_glia = ifelse(
+        Cluster_NT == "",
+        "glia",
+        "neurons"
+    )
+)
+```
+
+```{r}
+atac_cmeta <- mutate(
+    atac_cmeta,
+    neur_glia = ifelse(
+        Cluster_NT == "",
+        "glia",
+        "neurons"
+    )
+)
+```
+
+# RNA [curated]
+
+## Curation stats
+
+### Columns
+
+I did this before...
+
+```{r}
+cur_stats
+```
+
+```{r}
+subset(cur_stats, sample_name %in% rna_cmeta$sample_name) %>% 
+    .[, names(.) != "sample_name"] %>% 
+    lapply(sum) %>% 
+    reshape2::melt() %>% 
+    setNames(c("cells", "step")) %>% 
+    mutate(step = factor(step, levels=step)) %>% 
+    ggplot(
+        aes(step, cells/1e6)
+    ) + 
+    # geom_line() + 
+    geom_col(color="black", fill="gray75", linewidth=0.25) + 
+    labs(x=NULL, y="cells (millions)") +
+    scale_y_continuous(limits=c(0,1.25), expand=c(0,0)) +
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1)
+    )
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "rna_curation_colplot.pdf"),
+    width=60, height=50, units="mm"
+)
+```
+
+### Boxplot
+
+```{r}
+subset(cur_stats, sample_name %in% rna_cmeta$sample_name) %>% 
+    setNames(., sub("cells_under_1e.05_umi", "cells_under_100k_umi", names(.))) %>% 
+    reshape2::melt(id.var = "sample_name", value.name = "cells") %>% 
+    ggplot(
+        aes(variable, cells)
+    ) + 
+    geom_violin(linewidth=0.25) +
+    geom_boxplot(linewidth=0.25, outliers=FALSE, width=0.3) + 
+    labs(x=NULL, y="cells per library", title = "Multiome RNA Cell Curation") +
+    # scale_y_continuous(limits=c(0,1.25), expand=c(0,0)) +
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1)
+    ) -> p0
+p0
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "rna_curation_boxplot.pdf"),
+    width=60, height=50, units="mm"
+)
+```
+
+## UMIs per cell
+
+```{r}
+p1 <- ggplot(
+    rna_cmeta,
+    aes(neur_glia, log10(nCount_RNA))
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "UMIs per cell (log10)",
+        title = "Multiome RNA"
+    )
+p1
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_UMIs_per_cell.pdf"),
+    p1,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## Genes per cell
+
+```{r}
+p2 <- ggplot(
+    rna_cmeta,
+    aes(neur_glia, log10(nFeature_RNA))
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "genes per cell (log10)",
+        title = "Multiome RNA"
+    )
+p2
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_genes_per_cell.pdf"),
+    p2,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## Percent mitochondrial
+
+```{r}
+p3 <- ggplot(
+    rna_cmeta,
+    aes(neur_glia, percent.mt/100)
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    scale_y_continuous(
+        labels = scales::percent
+    ) + 
+    labs(
+        x = NULL,
+        y = "% mitochondrial",
+        title = "Multiome RNA"
+    )
+p3
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_percent_mito.pdf"),
+    p3,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## Cells per Group, Cluster
+
+```{r}
+table(rna_cmeta$neur_glia, rna_cmeta$Subcortex_Group_v4) %>% 
+    as.data.frame %>% 
+    subset(Freq>0) %>% 
+    setNames(c("neur_glia", "group", "cells")) %>% 
+    ggplot(
+        aes(neur_glia, log10(cells))
+    ) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "cells per Group (log10)",
+        title = "Multiome RNA"
+    ) -> p4
+p4
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_cells_per_Group.pdf"),
+    p4,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+```{r}
+table(rna_cmeta$neur_glia, rna_cmeta$Cluster_v4) %>% 
+    as.data.frame %>% 
+    subset(Freq>0) %>% 
+    setNames(c("neur_glia", "group", "cells")) %>% 
+    ggplot(
+        aes(neur_glia, log10(cells))
+    ) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "cells per Cluster (log10)",
+        title = "Multiome RNA"
+    ) -> p5
+p5
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_cells_per_Cluster.pdf"),
+    p5,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## UMIs per Group, Cluster
+
+```{r}
+p6 <- ggplot(
+    aggregate(rna_cmeta, nCount_RNA ~ neur_glia + Subcortex_Group_v4, FUN=sum) ,
+    aes(neur_glia, log10(nCount_RNA))
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "UMIs per Group (log10)",
+        title = "Multiome RNA"
+    )
+p6
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_UMIs_per_Group.pdf"),
+    p6,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+
+```{r}
+p7 <- ggplot(
+    aggregate(rna_cmeta, nCount_RNA ~ neur_glia + Cluster_v4, FUN=sum) ,
+    aes(neur_glia, log10(nCount_RNA))
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "UMIs per Cluster (log10)",
+        title = "Multiome RNA"
+    )
+p7
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/RNA_UMIs_per_Cluster.pdf"),
+    p7,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+# ATAC [curated]
+
+## UMIs per cell
+
+```{r}
+p8 <- ggplot(
+    atac_cmeta,
+    aes(neur_glia, log10(n_fragment))
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "UMIs per cell (log10)",
+        title = "Multiome ATAC"
+    )
+p8
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/ATAC_UMIs_per_cell.pdf"),
+    p8,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## (Skip): Peaks per cell
+
+I don't have this, would have to load the peak matrix. Not sure anyone asks
+for this anyway.
+
+## TSS Enrichment (SnapATAC2)
+
+```{r}
+p9 <- ggplot(
+    atac_cmeta,
+    aes(neur_glia, tsse)
+) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(width=0.3, outliers=FALSE, linewidth=0.25) + 
+    theme_md_classic() + 
+    labs(
+        x = NULL,
+        y = "TSS enrichment (per cell) (SnapATAC2)",
+        title = "Multiome ATAC"
+    )
+p9
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "curated/ATAC_Snap_TSSE_per_cell.pdf"),
+    p9,
+    width=30,
+    height=35,
+    units="mm"
+)
+```
+
+## (skip) FRiP (cluster-level)
+
+### Calculate
+
+I think the fragments in the cell metadata is actually reads, but the "reads in
+peaks" is actually insertion events, so divide by two
+
+```{r}
+# atac_reads_peaks$total_reads <- aggregate(n_fragment ~ Cluster_v4, atac_cmeta, FUN=sum) %>%
+#     `rownames<-`(., .[[1]]) %>% 
+#     .[atac_reads_peaks$marm_cluster_id, "n_fragment"]
+
+# atac_reads_peaks %>% 
+#     mutate(
+#         frip = 0.5*reads_in_peaks / total_reads
+#     )
+```
+
+Maybe skip this, use cellranger-arc peaks (valid QC).
+
+# ATAC [cellranger]
+
+## Fractions frags in cells, TSS, peaks
+
+```{r}
+cellr_summary %>% 
+    subset(Sample.ID %in% atac_cmeta$sample_name) %>% 
+    .[, c(
+        "Sample.ID", 
+        "ATAC.Fraction.of.high.quality.fragments.in.cells",
+        "ATAC.Fraction.of.high.quality.fragments.overlapping.TSS",
+        "ATAC.Fraction.of.high.quality.fragments.overlapping.peaks"
+    )] %>% 
+    setNames(c(
+        "sample_name",
+        "frac. fragments in cells",
+        "frac. fragments on TSS",
+        "frac. fragments in peaks"
+    )) %>% 
+    reshape2::melt() %>% 
+    ggplot(
+        aes(variable, value)
+    ) + 
+    geom_violin(linewidth=0.25) + 
+    geom_boxplot(linewidth=0.25, width=0.3) + 
+    coord_flip() +
+    scale_y_continuous(limits = c(0,1), expand=c(0,0)) +
+    labs(
+        x = NULL,
+        y = NULL,
+        title = "ATAC (cellranger-arc)"
+    ) +
+    theme_md_classic()
+```
+
+
+```{r}
+ggsave(
+    file.path(outdir, "cellranger/ATAC_fractions_frags_in_peaks_tss_cells.pdf"),
+    width=50,
+    height=35,
+    units="mm"
+)
+```
+
+
+# Fragment size distributions
+
+```{r}
+atac_ins_sizes %>% 
+    subset(Sample %in% atac_cmeta$sample_name) %>% 
+    split(., .$Sample) %>% 
+    lapply(mutate, count = count / max(count)) %>% 
+    unname %>% 
+    do.call(rbind, .) %>% 
+    ggplot(
+        aes(insert_size, count, group=Sample)
+    ) + 
+    geom_line(alpha=0.05, linewidth=0.25) + 
+    labs(
+        y = "scaled frequency",
+        x = "insert size (bp)",
+        title = "ATAC Fragment Sizes"
+    ) +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(outdir, "ATAC_insert_dist.pdf"),
+    width=40,
+    height=35,
+    units="mm"
+)
+```
+

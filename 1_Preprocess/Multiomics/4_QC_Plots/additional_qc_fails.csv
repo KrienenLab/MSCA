@@ -1,0 +1,2 @@
+﻿sample_name,barcoded_cell_sample_name,modality_fail,reason_qc_fail
+240207_HMBA_cjNutmeg_Slab4_Tile4_pooled1,P0029_1,RNA,42% of cells ended up in a low quality cluster
