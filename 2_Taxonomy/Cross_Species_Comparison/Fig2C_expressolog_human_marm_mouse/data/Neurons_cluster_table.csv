@@ -1,0 +1,383 @@
+supercluster_term,cluster_id,count
+Amygdala excitatory,157,14855
+Amygdala excitatory,155,11716
+Amygdala excitatory,174,10364
+Amygdala excitatory,172,8592
+Amygdala excitatory,175,8112
+Amygdala excitatory,154,7970
+Amygdala excitatory,161,7442
+Amygdala excitatory,160,7244
+Amygdala excitatory,158,6409
+Amygdala excitatory,405,6125
+Amygdala excitatory,156,5433
+Amygdala excitatory,406,4858
+Amygdala excitatory,407,2370
+Amygdala excitatory,153,2227
+Amygdala excitatory,419,2170
+Amygdala excitatory,159,2148
+Amygdala excitatory,162,807
+Amygdala excitatory,171,332
+Amygdala excitatory,173,233
+Amygdala excitatory,408,45
+CGE interneuron,288,24831
+CGE interneuron,290,20794
+CGE interneuron,293,20104
+CGE interneuron,287,18571
+CGE interneuron,286,15597
+CGE interneuron,289,14326
+CGE interneuron,294,14134
+CGE interneuron,292,12439
+CGE interneuron,291,12240
+CGE interneuron,283,10636
+CGE interneuron,282,10065
+CGE interneuron,296,9524
+CGE interneuron,284,9109
+CGE interneuron,279,7444
+CGE interneuron,278,7177
+CGE interneuron,280,5106
+CGE interneuron,295,4922
+CGE interneuron,285,4688
+CGE interneuron,281,2234
+CGE interneuron,276,2080
+CGE interneuron,277,1650
+Cerebellar inhibitory,306,6586
+Cerebellar inhibitory,307,3020
+Cerebellar inhibitory,303,1439
+Cerebellar inhibitory,300,1194
+Cerebellar inhibitory,304,719
+Cerebellar inhibitory,299,560
+Cerebellar inhibitory,298,318
+Cerebellar inhibitory,302,248
+Cerebellar inhibitory,305,191
+Cerebellar inhibitory,301,136
+Deep-layer corticothalamic and 6b,109,10646
+Deep-layer corticothalamic and 6b,106,9905
+Deep-layer corticothalamic and 6b,108,9206
+Deep-layer corticothalamic and 6b,110,8324
+Deep-layer corticothalamic and 6b,112,6334
+Deep-layer corticothalamic and 6b,98,4953
+Deep-layer corticothalamic and 6b,100,4900
+Deep-layer corticothalamic and 6b,84,4474
+Deep-layer corticothalamic and 6b,99,4421
+Deep-layer corticothalamic and 6b,105,4269
+Deep-layer corticothalamic and 6b,101,2972
+Deep-layer corticothalamic and 6b,104,1973
+Deep-layer corticothalamic and 6b,102,1920
+Deep-layer corticothalamic and 6b,111,1546
+Deep-layer corticothalamic and 6b,103,1268
+Deep-layer corticothalamic and 6b,107,998
+Deep-layer corticothalamic and 6b,97,287
+Deep-layer intratelencephalic,149,31428
+Deep-layer intratelencephalic,144,27079
+Deep-layer intratelencephalic,139,24657
+Deep-layer intratelencephalic,151,18750
+Deep-layer intratelencephalic,137,17737
+Deep-layer intratelencephalic,148,16196
+Deep-layer intratelencephalic,142,14326
+Deep-layer intratelencephalic,143,13468
+Deep-layer intratelencephalic,147,13265
+Deep-layer intratelencephalic,140,12455
+Deep-layer intratelencephalic,150,12307
+Deep-layer intratelencephalic,141,9992
+Deep-layer intratelencephalic,152,6048
+Deep-layer intratelencephalic,146,5654
+Deep-layer intratelencephalic,145,4953
+Deep-layer intratelencephalic,136,152
+Deep-layer near-projecting,94,2547
+Deep-layer near-projecting,93,2217
+Deep-layer near-projecting,92,2119
+Deep-layer near-projecting,90,1804
+Deep-layer near-projecting,88,1548
+Deep-layer near-projecting,91,1523
+Deep-layer near-projecting,86,1508
+Deep-layer near-projecting,89,1405
+Deep-layer near-projecting,95,1307
+Deep-layer near-projecting,87,1203
+Deep-layer near-projecting,96,685
+Deep-layer near-projecting,85,514
+Deep-layer near-projecting,83,476
+Eccentric medium spiny neuron,226,5927
+Eccentric medium spiny neuron,224,4297
+Eccentric medium spiny neuron,232,3682
+Eccentric medium spiny neuron,228,3227
+Eccentric medium spiny neuron,234,3211
+Eccentric medium spiny neuron,233,3128
+Eccentric medium spiny neuron,230,3123
+Eccentric medium spiny neuron,222,2826
+Eccentric medium spiny neuron,231,2372
+Eccentric medium spiny neuron,225,2296
+Eccentric medium spiny neuron,223,2239
+Eccentric medium spiny neuron,229,1857
+Eccentric medium spiny neuron,426,1600
+Eccentric medium spiny neuron,227,359
+Hippocampal CA1-3,180,14007
+Hippocampal CA1-3,179,8293
+Hippocampal CA1-3,183,7853
+Hippocampal CA1-3,184,7778
+Hippocampal CA1-3,182,7341
+Hippocampal CA1-3,119,6827
+Hippocampal CA1-3,181,6501
+Hippocampal CA1-3,186,6000
+Hippocampal CA1-3,187,5797
+Hippocampal CA1-3,169,1582
+Hippocampal CA1-3,188,1458
+Hippocampal CA1-3,185,561
+Hippocampal CA1-3,163,492
+Hippocampal CA1-3,189,349
+Hippocampal CA1-3,115,140
+Hippocampal CA4,197,2367
+Hippocampal CA4,195,2159
+Hippocampal CA4,192,1635
+Hippocampal CA4,196,1360
+Hippocampal CA4,193,1343
+Hippocampal CA4,194,551
+Hippocampal CA4,191,486
+Hippocampal CA4,198,417
+Hippocampal CA4,190,336
+Hippocampal dentate gyrus,200,23293
+Hippocampal dentate gyrus,201,18996
+Hippocampal dentate gyrus,204,9290
+Hippocampal dentate gyrus,203,8378
+Hippocampal dentate gyrus,205,5813
+Hippocampal dentate gyrus,199,1365
+Hippocampal dentate gyrus,202,398
+LAMP5-LHX6 and Chandelier,264,6669
+LAMP5-LHX6 and Chandelier,274,6373
+LAMP5-LHX6 and Chandelier,270,4751
+LAMP5-LHX6 and Chandelier,265,4251
+LAMP5-LHX6 and Chandelier,271,4045
+LAMP5-LHX6 and Chandelier,268,3843
+LAMP5-LHX6 and Chandelier,266,3566
+LAMP5-LHX6 and Chandelier,273,3254
+LAMP5-LHX6 and Chandelier,269,3214
+LAMP5-LHX6 and Chandelier,275,2174
+LAMP5-LHX6 and Chandelier,272,1960
+LAMP5-LHX6 and Chandelier,267,1018
+Lower rhombic lip,320,27800
+Lower rhombic lip,319,8164
+Lower rhombic lip,318,7999
+Lower rhombic lip,317,4858
+Lower rhombic lip,316,1939
+Lower rhombic lip,321,1119
+Lower rhombic lip,322,504
+Lower rhombic lip,315,267
+MGE interneuron,261,21457
+MGE interneuron,259,17841
+MGE interneuron,251,16688
+MGE interneuron,250,16604
+MGE interneuron,243,16126
+MGE interneuron,252,16079
+MGE interneuron,242,15796
+MGE interneuron,258,12943
+MGE interneuron,257,12242
+MGE interneuron,262,10119
+MGE interneuron,254,7539
+MGE interneuron,263,6587
+MGE interneuron,260,6212
+MGE interneuron,239,6114
+MGE interneuron,249,5821
+MGE interneuron,253,5703
+MGE interneuron,241,5583
+MGE interneuron,256,5526
+MGE interneuron,236,4303
+MGE interneuron,255,3341
+MGE interneuron,248,2535
+MGE interneuron,246,2100
+MGE interneuron,245,1566
+MGE interneuron,240,1327
+MGE interneuron,244,1172
+MGE interneuron,247,1110
+Mammillary body,324,3071
+Mammillary body,328,2346
+Mammillary body,325,2155
+Mammillary body,330,1808
+Mammillary body,327,1581
+Mammillary body,326,1553
+Mammillary body,329,1487
+Mammillary body,332,1061
+Mammillary body,333,711
+Mammillary body,323,654
+Mammillary body,331,175
+Medium spiny neuron,207,20569
+Medium spiny neuron,215,16654
+Medium spiny neuron,214,14016
+Medium spiny neuron,213,13450
+Medium spiny neuron,208,13170
+Medium spiny neuron,209,11410
+Medium spiny neuron,210,10299
+Medium spiny neuron,211,9093
+Medium spiny neuron,219,8342
+Medium spiny neuron,217,7260
+Medium spiny neuron,212,6867
+Medium spiny neuron,218,6712
+Medium spiny neuron,216,5720
+Medium spiny neuron,427,3436
+Medium spiny neuron,221,2571
+Medium spiny neuron,430,2057
+Medium spiny neuron,220,391
+Medium spiny neuron,206,172
+Midbrain-derived inhibitory,441,22931
+Midbrain-derived inhibitory,439,21004
+Midbrain-derived inhibitory,443,14414
+Midbrain-derived inhibitory,436,13890
+Midbrain-derived inhibitory,438,11928
+Midbrain-derived inhibitory,434,8469
+Midbrain-derived inhibitory,442,7951
+Midbrain-derived inhibitory,440,7366
+Midbrain-derived inhibitory,435,7340
+Midbrain-derived inhibitory,437,6147
+Midbrain-derived inhibitory,444,3991
+Midbrain-derived inhibitory,433,1351
+Miscellaneous,177,3941
+Miscellaneous,117,2655
+Miscellaneous,1,2474
+Miscellaneous,165,2064
+Miscellaneous,401,2038
+Miscellaneous,167,1973
+Miscellaneous,116,1341
+Miscellaneous,404,1276
+Miscellaneous,166,944
+Miscellaneous,114,915
+Miscellaneous,178,691
+Miscellaneous,2,671
+Miscellaneous,164,659
+Miscellaneous,168,631
+Miscellaneous,113,630
+Miscellaneous,170,503
+Miscellaneous,3,503
+Miscellaneous,132,492
+Miscellaneous,176,414
+Miscellaneous,118,109
+Miscellaneous,0,105
+Miscellaneous,314,42
+Splatter,365,28081
+Splatter,415,25816
+Splatter,366,11033
+Splatter,368,10857
+Splatter,429,9792
+Splatter,238,7651
+Splatter,364,7200
+Splatter,359,6660
+Splatter,409,6395
+Splatter,356,6063
+Splatter,418,5390
+Splatter,412,5062
+Splatter,380,4748
+Splatter,413,4634
+Splatter,355,4371
+Splatter,425,4253
+Splatter,367,4065
+Splatter,383,4024
+Splatter,417,3885
+Splatter,235,3850
+Splatter,344,3736
+Splatter,370,3622
+Splatter,373,3543
+Splatter,350,3486
+Splatter,390,3366
+Splatter,416,3344
+Splatter,428,3182
+Splatter,358,3175
+Splatter,423,3114
+Splatter,384,3100
+Splatter,422,2976
+Splatter,369,2975
+Splatter,414,2915
+Splatter,343,2797
+Splatter,375,2762
+Splatter,393,2754
+Splatter,345,2720
+Splatter,431,2691
+Splatter,357,2674
+Splatter,392,2659
+Splatter,403,2608
+Splatter,376,2573
+Splatter,432,2555
+Splatter,410,2511
+Splatter,347,2434
+Splatter,424,2384
+Splatter,362,2288
+Splatter,237,2234
+Splatter,398,2093
+Splatter,334,1998
+Splatter,377,1964
+Splatter,348,1861
+Splatter,387,1804
+Splatter,385,1800
+Splatter,394,1791
+Splatter,402,1764
+Splatter,374,1666
+Splatter,411,1665
+Splatter,396,1608
+Splatter,349,1557
+Splatter,381,1544
+Splatter,363,1482
+Splatter,354,1441
+Splatter,421,1417
+Splatter,397,1316
+Splatter,336,1263
+Splatter,360,1215
+Splatter,361,1067
+Splatter,399,1007
+Splatter,395,998
+Splatter,335,993
+Splatter,420,922
+Splatter,342,868
+Splatter,352,862
+Splatter,353,852
+Splatter,391,827
+Splatter,400,769
+Splatter,389,759
+Splatter,382,713
+Splatter,346,635
+Splatter,351,559
+Splatter,340,547
+Splatter,378,493
+Splatter,339,489
+Splatter,313,449
+Splatter,371,398
+Splatter,338,350
+Splatter,341,342
+Splatter,388,197
+Splatter,337,193
+Splatter,386,167
+Splatter,379,120
+Thalamic excitatory,446,15148
+Thalamic excitatory,454,11893
+Thalamic excitatory,451,9740
+Thalamic excitatory,458,7494
+Thalamic excitatory,460,7103
+Thalamic excitatory,453,5556
+Thalamic excitatory,448,5500
+Thalamic excitatory,452,5044
+Thalamic excitatory,459,4507
+Thalamic excitatory,449,3539
+Thalamic excitatory,450,3092
+Thalamic excitatory,447,2924
+Thalamic excitatory,372,2593
+Thalamic excitatory,456,509
+Thalamic excitatory,455,474
+Thalamic excitatory,457,296
+Thalamic excitatory,445,134
+Upper rhombic lip,311,97038
+Upper rhombic lip,310,33405
+Upper rhombic lip,312,5392
+Upper rhombic lip,308,920
+Upper rhombic lip,309,373
+Upper rhombic lip,297,34
+Upper-layer intratelencephalic,138,58263
+Upper-layer intratelencephalic,123,55595
+Upper-layer intratelencephalic,129,46343
+Upper-layer intratelencephalic,126,36970
+Upper-layer intratelencephalic,121,36308
+Upper-layer intratelencephalic,122,29434
+Upper-layer intratelencephalic,135,28248
+Upper-layer intratelencephalic,124,28224
+Upper-layer intratelencephalic,130,25496
+Upper-layer intratelencephalic,131,22050
+Upper-layer intratelencephalic,120,21417
+Upper-layer intratelencephalic,133,20086
+Upper-layer intratelencephalic,125,13397
+Upper-layer intratelencephalic,134,12095
+Upper-layer intratelencephalic,128,10650
+Upper-layer intratelencephalic,127,10430
