@@ -1,0 +1,865 @@
+---
+title: "1_Heatmaps_for_MOXD1_Regulons"
+output: html_document
+date: "2026-03-03"
+---
+
+Heatmap with certain groupings of cells (below), showing a few TFs, the target
+gene, and the peaks
+
+x-axis: Astro-TE NN, Astro-WM NN, Astro-NT NN, Other Nonneurons, all other classes except Nonneurons and Pin;
+y-axis genes: NFIA, POU3F2, NR2F1, MOXD1
+y-axis peaks: chr4:135119184-135119685, chr4:134932591-134933092; chr4:135137386-135137887, chr4:135137891-135138392
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    library(circlize)
+    library(RColorBrewer)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+    library(viridisLite)
+    library(grid)
+    library(igraph)
+    library(ggraph)
+    library(scales)
+    library(tibble)
+    library(tidyr)
+    library(purrr)
+    library(stringr)
+    library(GenomicRanges)
+})
+
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        plot.title  = element_text(hjust = 0.5, face = "bold", size = 8),
+        axis.title  = element_text(color = "black", size = 6),
+        axis.text   = element_text(color = "black", size = 6),
+        axis.ticks  = element_line(color = "black"),
+        legend.text = element_text(size = 6),
+        strip.text  = element_text(size = 8),
+        strip.background = element_blank(),
+        complete = TRUE
+    )
+}
+```
+
+# Paths
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260303_MOXD1_Analysis"
+# outdir   <- file.path(pdir, "combined_analysis")
+
+pdir_plots <- file.path(pdir, "plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+
+pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"
+```
+
+```{r}
+# multiome rna pseudobulk/metacell matrix
+path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_genes_matrix.csv"
+
+# multiome atac 
+path_atac_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_462k_peaks_matrix.csv"
+
+# path_obs <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_obs.csv")
+# path_obs <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/preprint_freeze/subcortex_anno_table_preprint.csv"
+path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
+
+path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
+
+# metacell AUCell scores
+pdir_auc <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/AUCell/data"
+path_rna_auc  <- file.path(pdir_auc, "score_rna_auc.csv")
+path_atac_auc <- file.path(pdir_auc, "score_atac_auc.csv")
+
+path_rna_auc_nn  <- file.path(pdir_auc, "score_rna_auc_nonneuron.csv")
+path_atac_auc_nn <- file.path(pdir_auc, "score_atac_auc_nonneuron.csv")
+```
+
+# Utilities
+
+## CPM normalization
+
+```{r}
+# rows are features, columns are samples
+cpm <- function(mat) {
+    t(1e6 * t(mat) / colSums(mat))
+}
+```
+
+## Z-scoring
+
+```{r}
+# z-score each row in matrix
+scale_rows <- function(m) {
+    t(scale(t(m)))
+}
+```
+
+# Imports
+
+## RNA Gene Count Matrix
+
+```{r}
+rna_by_cl_raw <- data.table::fread(path_rna_by_cl_raw, header=TRUE)
+rnames        <- rna_by_cl_raw[[1]]
+rna_by_cl_raw <- as.matrix(rna_by_cl_raw[,-1])
+rownames(rna_by_cl_raw) <- rnames
+```
+
+```{r}
+# gene-by-cluster
+dim(rna_by_cl_raw)
+# [1] 35787  1811
+```
+
+## ATAC Peak Count Matrix
+
+```{r}
+atac_by_cl_raw <- data.table::fread(path_atac_by_cl_raw, header=TRUE)
+rnames         <- atac_by_cl_raw[[1]]
+atac_by_cl_raw <- as.matrix(atac_by_cl_raw[,-1])
+rownames(atac_by_cl_raw) <- rnames
+```
+
+```{r}
+# peak-by-cluster
+dim(atac_by_cl_raw)
+# [1] 462698   1810
+```
+
+## Import eRegulons
+
+```{r}
+# direct (used almost exclusively)
+ereg_neur_dir <- read.delim(
+    "/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulon_direct.tsv"
+)
+# extended (checked in some cases)
+ereg_neur_ext <- read.delim(
+    "/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulons_extended.tsv"
+)
+```
+
+```{r}
+# glia
+ereg_glia_dir <- read.delim(
+    "/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_nonneuron/outs/eRegulon_direct.tsv"
+)
+## not used
+# ereg_glia_ext <- read.delim(
+#     "/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_nonneuron/outs/eRegulon_extended.tsv"
+# )
+```
+
+### Subset eregulons
+
+```{r}
+ereg_neur_dir[, c("eRegulon_name"), drop=FALSE] %>% 
+    unique %>% 
+    mutate(
+        group = sub(".*_", "", eRegulon_name),
+        direct = ifelse(grepl("extended", eRegulon_name), "extended", "direct")
+    ) %>% 
+    .[, c("group", "direct")] %>% 
+    table
+#      direct
+# group direct
+#   -/-      7
+#   -/+      7
+#   +/-    119
+#   +/+    188
+```
+
+```{r}
+ereg_neur_dir_pp <- subset(ereg_neur_dir, sub(".*_", "", eRegulon_name) == "+/+")
+stopifnot(!any(ereg_neur_dir_pp$Gene == ""))
+```
+
+```{r}
+ereg_glia_dir_pp <- subset(ereg_glia_dir, sub(".*_", "", eRegulon_name) == "+/+")
+stopifnot(!any(ereg_glia_dir_pp$Gene == ""))
+```
+
+```{r}
+# > ereg_neur_dir_pp %>% head %>% print.data.frame
+#                      Region   Gene importance_R2G    rho_R2G importance_x_rho importance_x_abs_rho   TF
+# 1  chr5:135417727-135418228  PSPC1     0.01869581 0.09148575     0.0017104003         0.0017104003 ADNP
+# 2   chr22:37851491-37851992 CLASRP     0.01975477 0.08738445     0.0017262601         0.0017262601 ADNP
+# 3   chr12:89625022-89625523 ERLIN1     0.06338035 0.08413996     0.0053328203         0.0053328203 ADNP
+# 4 chr11:118877897-118878398 TM7SF2     0.01687300 0.05894899     0.0009946464         0.0009946464 ADNP
+# 5   chr22:39813456-39813957  DHX34     0.02599663 0.05410668     0.0014065913         0.0014065913 ADNP
+# 6    chr5:37038700-37039201   SGK2     0.04462673 0.06552464     0.0029241506         0.0029241506 ADNP
+#   is_extended   eRegulon_name    Gene_signature_name  Region_signature_name importance_TF2G regulation
+# 1       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.6529321          1
+# 2       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.3945265          1
+# 3       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.5516774          1
+# 4       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.4301004          1
+# 5       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.2913450          1
+# 6       False ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.4394920          1
+#    rho_TF2G triplet_rank
+# 1 0.4964991        75441
+# 2 0.2088355        69754
+# 3 0.2462354        47132
+# 4 0.1245037        86496
+# 5 0.1088690        96461
+# 6 0.1338757        81566
+```
+
+Also add in the negative (direct):
+
+```{r}
+ereg_neur_dir_mp <- subset(ereg_neur_dir, sub(".*_", "", eRegulon_name) == "-/+")
+stopifnot(!any(ereg_neur_dir_mp$Gene == ""))
+
+# > ereg_neur_dir_mp %>% head %>% print.data.frame
+#                           Region    Gene importance_R2G   rho_R2G importance_x_rho importance_x_abs_rho   TF
+# 103927    chr6:69064177-69064678  ACVR1C     0.06114124 0.4614495      0.028213595          0.028213595 CUX2
+# 103928   chr15:37952194-37952695   FEZF2     0.04193105 0.4482963      0.018797534          0.018797534 CUX2
+# 103929   chr19:47562397-47562898 SLC35F3     0.03773425 0.5768292      0.021766219          0.021766219 CUX2
+# 103930 chr10:130000026-130000527  BCL11B     0.02587014 0.6378575      0.016501459          0.016501459 CUX2
+# 103931   chr17:56314823-56315324    RARB     0.07671254 0.6571497      0.050411621          0.050411621 CUX2
+# 103932    chr5:82011367-82011868   RPRML     0.03999827 0.2499469      0.009997443          0.009997443 CUX2
+#        is_extended   eRegulon_name   Gene_signature_name Region_signature_name importance_TF2G regulation
+# 103927       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       0.5078608         -1
+# 103928       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       0.4828875         -1
+# 103929       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       0.4418370         -1
+# 103930       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       1.1057490         -1
+# 103931       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       0.2755693         -1
+# 103932       False CUX2_direct_-/+ CUX2_direct_-/+_(11g) CUX2_direct_-/+_(12r)       0.2916170         -1
+#           rho_TF2G triplet_rank
+# 103927 -0.10727432        73150
+# 103928 -0.07588564        50121
+# 103929 -0.10051838        35114
+# 103930 -0.12360910        53411
+# 103931 -0.14584437        48224
+# 103932 -0.07962536        90739
+```
+
+```{r}
+ereg_glia_dir_mp <- subset(ereg_glia_dir, sub(".*_", "", eRegulon_name) == "-/+")
+stopifnot(!any(ereg_glia_dir_mp$Gene == ""))
+```
+
+### Group genes/peaks by eRegulons
+
+```{r}
+# Target genes by regulon
+ereg_neur_dir_pp_genes <- ereg_neur_dir_pp %>%
+    group_by(eRegulon_name) %>%
+    summarise(genes = list(unique(Gene)), .groups = "drop")
+
+# Peaks by Regulon (if column name differs, change 'region')
+ereg_neur_dir_pp_peaks <- ereg_neur_dir_pp %>%
+  group_by(eRegulon_name) %>%
+  summarise(peaks = list(unique(Region)), .groups = "drop")
+
+# And now join (eRegulon_name, genes, peaks)
+ereg_neur_dir_pp_both <- inner_join(ereg_neur_dir_pp_genes, ereg_neur_dir_pp_peaks, by = "eRegulon_name")
+stopifnot(length(unique(ereg_neur_dir_pp$eRegulon_name)) == nrow(ereg_neur_dir_pp_both))
+# > nrow(ereg_neur_dir_pp_both)
+# [1] 188
+# > length(unique(ereg_neur_dir_pp$TF))
+# [1] 188
+```
+
+```{r}
+# and direct repressors 
+ereg_neur_dir_mp_genes <- ereg_neur_dir_mp %>% 
+    group_by(eRegulon_name) %>%
+    summarise(genes = list(unique(Gene)), .groups = "drop")
+
+ereg_neur_dir_mp_peaks <- ereg_neur_dir_mp %>%
+  group_by(eRegulon_name) %>%
+  summarise(peaks = list(unique(Region)), .groups = "drop")
+
+ereg_neur_dir_mp_both <- inner_join(ereg_neur_dir_mp_genes, ereg_neur_dir_mp_peaks, by = "eRegulon_name")
+stopifnot(length(unique(ereg_neur_dir_mp$eRegulon_name)) == nrow(ereg_neur_dir_mp_both))
+# > nrow(ereg_neur_dir_mp_both)
+# [1] 7
+# > length(unique(ereg_neur_dir_mp$TF))
+# [1] 7
+```
+
+And for glia:
+
+```{r}
+# Target genes by regulon
+ereg_glia_dir_pp_genes <- ereg_glia_dir_pp %>%
+    group_by(eRegulon_name) %>%
+    summarise(genes = list(unique(Gene)), .groups = "drop")
+
+# Peaks by Regulon (if column name differs, change 'region')
+ereg_glia_dir_pp_peaks <- ereg_glia_dir_pp %>%
+  group_by(eRegulon_name) %>%
+  summarise(peaks = list(unique(Region)), .groups = "drop")
+
+# And now join (eRegulon_name, genes, peaks)
+ereg_glia_dir_pp_both <- inner_join(ereg_glia_dir_pp_genes, ereg_glia_dir_pp_peaks, by = "eRegulon_name")
+stopifnot(length(unique(ereg_glia_dir_pp$eRegulon_name)) == nrow(ereg_glia_dir_pp_both))
+# > nrow(ereg_glia_dir_pp_both)
+# [1] 105
+# > length(unique(ereg_glia_dir_pp$TF))
+# [1] 105
+```
+
+```{r}
+# and direct repressors 
+ereg_glia_dir_mp_genes <- ereg_glia_dir_mp %>% 
+    group_by(eRegulon_name) %>%
+    summarise(genes = list(unique(Gene)), .groups = "drop")
+
+ereg_glia_dir_mp_peaks <- ereg_glia_dir_mp %>%
+  group_by(eRegulon_name) %>%
+  summarise(peaks = list(unique(Region)), .groups = "drop")
+
+ereg_glia_dir_mp_both <- inner_join(ereg_glia_dir_mp_genes, ereg_glia_dir_mp_peaks, by = "eRegulon_name")
+stopifnot(length(unique(ereg_glia_dir_mp$eRegulon_name)) == nrow(ereg_glia_dir_mp_both))
+# > nrow(ereg_glia_dir_mp_both)
+# [1] 10
+# > length(unique(ereg_glia_dir_mp$TF))
+# [1] 10
+```
+
+## Obs
+
+obs are cluster-level (and cluster names are rownames).
+
+will require all rna, atac, and obs to line-up correctly.
+
+```{r}
+obs <- read.csv(path_obs, row.names = "marm_cluster_id")
+obs$inconclusive_mapping <- as.logical(toupper(obs$inconclusive_mapping))
+# > nrow(obs)
+# [1] 1737
+
+## not true since preprint [but doesn't matter will be the same below]
+# stopifnot(identical(
+#     sort(rownames(obs)),
+#     sort(colnames(rna_by_cl_raw))
+# ))
+```
+
+```{r}
+# > head(rownames(obs))
+# [1] "cluster_1" "cluster_2" "cluster_3" "cluster_4" "cluster_5" "cluster_6"
+# > names(obs)
+#  [1] "Subcortex_Class_v4"                  "Subcortex_Group_v4"                  "Cluster_v4_size"                    
+#  [4] "Cluster_NT"                          "Figure_Panel"                        "Panel_sections"                     
+#  [7] "Panel_Purpose"                       "Subcortex_color_hex_cluster"         "Subcortex_color_hex_cluster_display"
+# [10] "Subcortex_Class_v4_BG"               "Cluster_Dominant_Region"             "Group_Dominant_Region"              
+# [13] "Group_NT"                            "inconclusive_mapping"  
+
+### from preprint:
+# > head(rownames(obs))
+# [1] "cluster_1" "cluster_2" "cluster_3" "cluster_4" "cluster_5" "cluster_6"
+# > names(obs)
+#  [1] "Subcortex_Class_v4"                  "Subcortex_Group_v4"                 
+#  [3] "Cluster_v4_size"                     "Cluster_NT"                         
+#  [5] "Figure_Panel"                        "Panel_sections"                     
+#  [7] "Panel_Purpose"                       "Subcortex_color_hex_cluster"        
+#  [9] "Subcortex_color_hex_cluster_display" "preprint_analysis_include"          
+# [11] "Subcortex_Class_v4_BG"               "Cluster_Dominant_Region"            
+# [13] "Group_Dominant_Region"               "Group_NT"   
+```
+
+## Subset matrices & obs ! [OVERWRITE]
+
+Will only use the intersection of the RNA and ATAC clusters (so drop that single
+THM Glut cluster that lacked ATAC data).
+
+Also only use clusters in the `preprint_analysis_include` set.
+
+```{r}
+obs <- subset(obs, !inconclusive_mapping)
+obs <- obs[rownames(obs) %in% colnames(atac_by_cl_raw), ]
+# > nrow(obs)
+# [1] 1641
+```
+
+```{r}
+rna_by_cl_raw  <- rna_by_cl_raw[,  rownames(obs)]
+atac_by_cl_raw <- atac_by_cl_raw[, rownames(obs)]
+```
+
+## Color palettes
+
+```{r}
+# color palettes
+pal_df <- read.csv(path_palettes)
+
+palettes <- split(pal_df, pal_df$Type) %>% 
+    lapply(function(x) setNames(x$color_hex, x$Name))
+# > palettes$Class
+#        BG   CNU-HTH GABA   CNU-HTH Glut       CTX GABA       HTH GABA       HTH Glut       HTH Hist     MB-HB GABA     MB-HB Glut MB-HTH-HB Sero 
+# "#CBC3E3"      "#E69F00"      "#56B4E9"      "#009E73"      "#F0E442"      "#0072B2"      "#D55E00"      "#CC79A7"      "#44AA99"      "#AA4499" 
+# Nonneuron   Pineal Gland       SEP GABA       TEL Glut       THM GABA       THM Glut 
+# "#999999"      "#B3C65C"      "#882255"      "#88CCEE"      "#DDCC77"      "#332288" 
+```
+
+## Import AUCell scores
+
+```{r}
+geneAUC_neur_by_cl <- as.matrix(read.csv(path_rna_auc,  row.names="X"))
+peakAUC_neur_by_cl <- as.matrix(read.csv(path_atac_auc, row.names="X"))
+
+geneAUC_neur_by_cl <- geneAUC_neur_by_cl[, rownames(obs)]
+peakAUC_neur_by_cl <- peakAUC_neur_by_cl[, rownames(obs)]
+```
+
+```{r}
+geneAUC_glia_by_cl <- as.matrix(read.csv(path_rna_auc_nn,  row.names="X"))
+peakAUC_glia_by_cl <- as.matrix(read.csv(path_atac_auc_nn, row.names="X"))
+
+geneAUC_glia_by_cl <- geneAUC_glia_by_cl[, rownames(obs)]
+peakAUC_glia_by_cl <- peakAUC_glia_by_cl[, rownames(obs)]
+```
+
+## CPM normalize RNA/ATAC matrices
+
+```{r}
+atac_by_cl_cpm <- cpm(atac_by_cl_raw)
+rna_by_cl_cpm  <- cpm(rna_by_cl_raw)
+```
+
+Will not z-score the entire matrix (expensive), will only do as needed for
+selected peaks.
+
+### Get mean CPM & z-scores by Group
+
+```{r}
+stopifnot(all(colnames(rna_by_cl_cpm) == rownames(obs)))
+rna_group_mean_cpm <- t(apply(
+    rna_by_cl_cpm, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+```
+
+```{r}
+stopifnot(all(colnames(atac_by_cl_cpm) == rownames(obs)))
+atac_group_mean_cpm <- t(apply(
+    atac_by_cl_cpm, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+```
+
+And z-scores:
+
+```{r}
+rna_group_mean_cpm_z  <- scale_rows(rna_group_mean_cpm)
+atac_group_mean_cpm_z <- scale_rows(atac_group_mean_cpm)
+```
+
+## Subset regulons (dir +/+))
+
+```{r}
+geneAUC_neur_dir_pp_by_cl <- geneAUC_neur_by_cl[
+    rownames(geneAUC_neur_by_cl) %in% ereg_neur_dir_pp_both$eRegulon_name,
+]
+peakAUC_neur_dir_pp_by_cl <- peakAUC_neur_by_cl[
+    rownames(peakAUC_neur_by_cl) %in% ereg_neur_dir_pp_both$eRegulon_name,
+]
+# > dim(geneAUC_neur_dir_pp_by_cl)
+# [1]  188 1641
+```
+
+```{r}
+geneAUC_glia_dir_pp_by_cl <- geneAUC_glia_by_cl[
+    rownames(geneAUC_glia_by_cl) %in% ereg_glia_dir_pp_both$eRegulon_name,
+]
+peakAUC_glia_dir_pp_by_cl <- peakAUC_glia_by_cl[
+    rownames(peakAUC_glia_by_cl) %in% ereg_glia_dir_pp_both$eRegulon_name,
+]
+# > dim(geneAUC_glia_dir_pp_by_cl)
+# [1]  105 1641
+```
+
+## AUCell means by Group, Class
+
+```{r}
+geneAUC_neur_dir_pp_by_group <- t(apply(
+    geneAUC_neur_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+geneAUC_neur_dir_pp_by_class <- t(apply(
+    geneAUC_neur_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+```{r}
+peakAUC_neur_dir_pp_by_group <- t(apply(
+    peakAUC_neur_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+peakAUC_neur_dir_pp_by_class <- t(apply(
+    peakAUC_neur_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+glia
+
+```{r}
+geneAUC_glia_dir_pp_by_group <- t(apply(
+    geneAUC_glia_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+geneAUC_glia_dir_pp_by_class <- t(apply(
+    geneAUC_glia_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+```{r}
+peakAUC_glia_dir_pp_by_group <- t(apply(
+    peakAUC_glia_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+peakAUC_glia_dir_pp_by_class <- t(apply(
+    peakAUC_glia_dir_pp_by_cl, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+## Z-score AUCell scores
+
+For direct +/+ eRegulons, we expect both modalities to be high. Combine by 
+z-scoring each matrix (per regulon across clusters) and averaging:
+
+```{r}
+geneAUC_neur_by_cl_z <- scale_rows(geneAUC_neur_by_cl)
+peakAUC_neur_by_cl_z <- scale_rows(peakAUC_neur_by_cl)
+```
+
+```{r}
+geneAUC_neur_dir_pp_by_cl_z <- scale_rows(geneAUC_neur_dir_pp_by_cl)
+peakAUC_neur_dir_pp_by_cl_z <- scale_rows(peakAUC_neur_dir_pp_by_cl)
+```
+
+glia
+
+```{r}
+geneAUC_glia_by_cl_z <- scale_rows(geneAUC_glia_by_cl)
+peakAUC_glia_by_cl_z <- scale_rows(peakAUC_glia_by_cl)
+```
+
+```{r}
+geneAUC_glia_dir_pp_by_cl_z <- scale_rows(geneAUC_glia_dir_pp_by_cl)
+peakAUC_glia_dir_pp_by_cl_z <- scale_rows(peakAUC_glia_dir_pp_by_cl)
+```
+
+### AUCell z-score means by Group, Class
+
+For regulon AUC scores, will use the cluster-level z-scores, and average them.
+
+```{r}
+geneAUC_neur_dir_pp_by_group_z <- t(apply(
+    geneAUC_neur_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+geneAUC_neur_dir_pp_by_class_z <- t(apply(
+    geneAUC_neur_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+```{r}
+peakAUC_neur_dir_pp_by_group_z <- t(apply(
+    peakAUC_neur_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+peakAUC_neur_dir_pp_by_class_z <- t(apply(
+    peakAUC_neur_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+glia
+
+```{r}
+geneAUC_glia_dir_pp_by_group_z <- t(apply(
+    geneAUC_glia_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+geneAUC_glia_dir_pp_by_class_z <- t(apply(
+    geneAUC_glia_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+```{r}
+peakAUC_glia_dir_pp_by_group_z <- t(apply(
+    peakAUC_glia_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+peakAUC_glia_dir_pp_by_class_z <- t(apply(
+    peakAUC_glia_dir_pp_by_cl_z, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
+))
+```
+
+# Get grouping variables
+
+x-axis: Astro-TE NN, Astro-WM NN, Astro-NT NN, Other Nonneurons, all other classes except Nonneurons and Pin;
+y-axis genes: NFIA, POU3F2, NR2F1, MOXD1
+y-axis peaks: chr4:135119184-135119685, chr4:134932591-134933092; chr4:135137386-135137887, chr4:135137891-135138392
+
+```{r}
+gns <- c("NFIA", "POU3F2", "NR2F1", "MOXD1")
+pks <- c(
+    "chr4:135137891-135138392",
+    "chr4:135137386-135137887", 
+    "chr4:135119184-135119685", 
+    "chr4:134932591-134933092"
+)
+```
+
+
+```{r}
+# list with "regroup" names, elements contain taxonomic Groups
+regroups <- list(
+    "Astro-TE NN" = "Astro-TE NN",
+    "Astro-WM NN" = "Astro-WM NN",
+    "Astro-NT NN" = "Astro-NT NN",
+    "Other Nonneurons" = sort(unique(filter(
+        obs, 
+        Subcortex_Class_v4 == "Nonneuron", 
+        !grepl("Astro", Subcortex_Group_v4)
+    )$Subcortex_Group_v4))
+)
+
+regroups <- obs %>% 
+    filter(Subcortex_Class_v4 != "Nonneuron") %>% 
+    .[, c("Subcortex_Class_v4", "Subcortex_Group_v4")] %>% 
+    unique %>% 
+    (function(x) split(x$Subcortex_Group_v4, x$Subcortex_Class_v4)) %>% 
+    c(regroups, .)
+```
+
+## Get RNA & ATAC avg z-scores
+
+```{r}
+rna_regoups_mean_cpm_z  <- sapply(regroups, function(x) rowMeans(rna_group_mean_cpm_z[,  x, drop=FALSE]))
+atac_regoups_mean_cpm_z <- sapply(regroups, function(x) rowMeans(atac_group_mean_cpm_z[, x, drop=FALSE]))
+```
+
+## Get ereg avg z-scores
+
+```{r}
+geneAUC_regroups_neur_dir_pp_z <- sapply(
+    regroups, function(x) rowMeans(geneAUC_neur_dir_pp_by_group_z[, x, drop=FALSE])
+)
+
+geneAUC_regroups_glia_dir_pp_z <- sapply(
+    regroups, function(x) rowMeans(geneAUC_glia_dir_pp_by_group_z[, x, drop=FALSE])
+)
+```
+
+```{r}
+geneAUC_regroups_comb <- rbind(
+    geneAUC_regroups_neur_dir_pp_z[
+        unlist(sapply(gns, grep, rownames(geneAUC_regroups_neur_dir_pp_z), value=T)),
+        ,
+        drop=F
+    ] %>% `rownames<-`(., paste0("Neuron: ", rownames(.))),
+    geneAUC_regroups_glia_dir_pp_z[
+        unlist(sapply(gns, grep, rownames(geneAUC_regroups_glia_dir_pp_z), value=T)),
+        ,
+        drop=F
+    ] %>% `rownames<-`(., paste0("Glia: ", rownames(.)))
+)
+
+rownames(geneAUC_regroups_comb) <- gsub("_", " ", rownames(geneAUC_regroups_comb))
+# rownames(geneAUC_regroups_comb) <- sub(" +/+$", " (+/+)", rownames(geneAUC_regroups_comb))
+```
+
+### peak rename map
+
+```{r}
+pk_rnm <- c(
+    "chr4:135137891-135138392" = "E1",
+    "chr4:135137386-135137887" = "E2",
+    "chr4:135119184-135119685" = "E3",
+    "chr4:134932591-134933092" = "E4"
+)
+```
+
+## Heatmap
+
+```{r}
+# will put these in order at the beginning, and everything else comes after
+cl_ord <- c("Astro-TE NN", "Astro-WM NN", "Astro-NT NN", "Other Nonneurons", "TEL Glut", "SEP GABA")
+
+rbind(
+    rna_regoups_mean_cpm_z[gns, ],
+    atac_regoups_mean_cpm_z[pks, ] %>% `rownames<-`(., pk_rnm[rownames(.)])
+) %>% 
+    (function(x) {
+        x[x > 5]  <- 5
+        x[x < -5] <- -5
+        x
+    }) %>% 
+    .[, c(cl_ord, setdiff(colnames(.), cl_ord))] %>% # doing the order thing
+    Heatmap(
+        name = "z-score",
+        col = col_fun,
+        row_split = factor(
+            c(rep("Genes", length(gns)), rep("cCREs", length(pks))),
+            levels = c("Genes", "cCREs")
+        ),
+        column_split = factor(
+            c(rep("Glia", 4), rep("Neurons", length(regroups)-4)),
+            levels = c("Glia", "Neurons")
+        ),
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_dend=FALSE,
+        show_row_dend=FALSE,
+        heatmap_legend_param = list(
+            title = "z-score",
+            at = c(-5, 0, 5),
+            title_gp  = gpar(fontfamily = "ArialMT", fontsize = 8, fontface="bold"),
+            labels_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+            legend_height = unit(12, "mm"),
+            grid_width    = unit(2.5, "mm")   # thickness of colorbar
+        ),
+        row_names_gp    = gpar(fontfamily = "ArialMT", fontsize = 6),
+        column_names_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+        row_title_gp    = gpar(fontfamily = "ArialMT", fontsize = 8), # split labels ("Genes", "cCREs")
+        column_title_gp = gpar(fontfamily = "ArialMT", fontsize = 6)
+    ) -> hm
+hm
+```
+
+```{r}
+pdf(file.path(pdir_plots, "heatmap_zscore_genes_peaks2.pdf"), width=2.7, height=1.7)
+print(hm)
+invisible(dev.off())
+```
+
+
+## Heatmap w/ eregulons
+
+```{r}
+rbind(
+    rna_regoups_mean_cpm_z[gns, ],
+    geneAUC_regroups_comb,
+    atac_regoups_mean_cpm_z[pks, ] %>% `rownames<-`(., pk_rnm[rownames(.)])
+) %>% 
+    (function(x) {
+        x[x > 5]  <- 5
+        x[x < -5] <- -5
+        x
+    }) %>% 
+    .[, c(cl_ord, setdiff(colnames(.), cl_ord))] %>% # doing the order thing
+    Heatmap(
+        name = "z-score",
+        col = col_fun,
+        row_split = factor(
+            c(rep("Genes", length(gns)), rep("eRegulons", nrow(geneAUC_regroups_comb)), rep("cCREs", length(pks))),
+            levels = c("Genes", "eRegulons", "cCREs")
+        ),
+        column_split = factor(
+            c(rep("Glia", 4), rep("Neurons", length(regroups)-4)),
+            levels = c("Glia", "Neurons")
+        ),
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_dend=FALSE,
+        show_row_dend=FALSE,
+        heatmap_legend_param = list(
+            title = "z-score",
+            at = c(-5, 0, 5),
+            title_gp  = gpar(fontfamily = "ArialMT", fontsize = 8, fontface="bold"),
+            labels_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+            legend_height = unit(12, "mm"),
+            grid_width    = unit(2.5, "mm")   # thickness of colorbar
+        ),
+        row_names_gp    = gpar(fontfamily = "ArialMT", fontsize = 6),
+        column_names_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+        row_title_gp    = gpar(fontfamily = "ArialMT", fontsize = 8), # split labels ("Genes", "cCREs")
+        column_title_gp = gpar(fontfamily = "ArialMT", fontsize = 6)
+    ) -> hm
+hm
+```
+
+```{r}
+pdf(file.path(pdir_plots, "heatmap_zscore_genes_regulons_peaks.pdf"), width=3.3, height=2.1)
+print(hm)
+invisible(dev.off())
+```
+
+And split out MOXD1
+
+
+```{r}
+rbind(
+    rna_regoups_mean_cpm_z[gns, ],
+    geneAUC_regroups_comb,
+    atac_regoups_mean_cpm_z[pks, ] %>% `rownames<-`(., pk_rnm[rownames(.)])
+) %>% 
+    (function(x) {
+        x[x > 5]  <- 5
+        x[x < -5] <- -5
+        x
+    }) %>% 
+    .[, c(cl_ord, setdiff(colnames(.), cl_ord))] %>% # doing the order thing
+    Heatmap(
+        name = "z-score",
+        col = col_fun,
+        row_split = factor(
+            c(rep("TF", 3), "Target", rep("eRegulons", nrow(geneAUC_regroups_comb)), rep("cCREs", length(pks))),
+            levels = c("Target", "TF", "eRegulons", "cCREs")
+        ),
+        column_split = factor(
+            c(rep("Glia", 4), rep("Neurons", length(regroups)-4)),
+            levels = c("Glia", "Neurons")
+        ),
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_dend=FALSE,
+        show_row_dend=FALSE,
+        heatmap_legend_param = list(
+            title = "z-score",
+            at = c(-5, 0, 5),
+            title_gp  = gpar(fontfamily = "ArialMT", fontsize = 6, fontface="bold"),
+            labels_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+            legend_height = unit(12, "mm"),
+            grid_width    = unit(2.5, "mm")   # thickness of colorbar
+        ),
+        row_names_gp    = gpar(fontfamily = "ArialMT", fontsize = 6),
+        column_names_gp = gpar(fontfamily = "ArialMT", fontsize = 6),
+        row_title_gp    = gpar(fontfamily = "ArialMT", fontsize = 6), # split labels ("Genes", "cCREs")
+        column_title_gp = gpar(fontfamily = "ArialMT", fontsize = 6)
+    ) -> hm
+hm
+```
+
+```{r}
+pdf(file.path(pdir_plots, "heatmap_zscore_genes_regulons_peaks2.pdf"), width=3.3, height=2.1)
+print(hm)
+invisible(dev.off())
+```
+
+# (check nfia exp)
+
+```{r}
+rna_group_mean_cpm["NFIA", ] %>% 
+    sort(TRUE) %>% 
+    as.data.frame %>% 
+    setNames("exp") %>% 
+    mutate(rank_exp = rank(exp)) %>% 
+    ggplot(aes(rank_exp, log10(exp))) + 
+    geom_point() + 
+    labs(title="NFIA") + 
+    theme_md_classic()
+```
+
+```{r}
+rna_group_mean_cpm["NFIA", ] %>% 
+    sort(TRUE) %>% 
+    head(30) %>% 
+    log10 %>% 
+   cbind 
+```
+

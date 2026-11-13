@@ -1,0 +1,641 @@
+---
+title: "260305_Make_browsershot"
+output: html_document
+date: "2026-03-05"
+---
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ggplot2)
+    library(patchwork)
+    library(BRGenomics)
+})
+```
+
+```{r}
+pdir     <- "/Volumes/krienen/lab_members/mike/260303_MOXD1_Analysis/browsershot"
+pdir_dat <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster"
+pdir_bw  <- file.path(pdir_dat, "data/atac/bw")
+
+path_gtf <- "/Volumes/krienen/genomic_annotations/cellranger_ref/mCalJa1.2.pat.X_rs_mitos2/mCalJac1-pat-X_rs_mitos2/genes/genes.gtf.gz"
+```
+
+```{r}
+# github.com/mdeber/browser_shot_plotter
+source(file.path(pdir, "browser_shot_plotter/plot_shot_functions.R"))
+source(file.path(pdir, "browser_shot_plotter/plot_shot_wrapper.R"))
+```
+
+```{r}
+anno <- read.csv(file.path(pdir_dat, "metadata/revision/subcortex_anno_table_updated_clean_20260218.csv"))
+anno$inconclusive_mapping <- as.logical(toupper(anno$inconclusive_mapping))
+```
+
+```{r}
+gtf <- import(path_gtf)
+```
+
+# Get bigWigs of interest
+
+```{r}
+groups <- unique(anno[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]) %>% 
+    `rownames<-`(NULL) %>% 
+    setNames(c("group", "class"))
+
+groups_use  <- sort(grep("Astro", groups$group, value=T))
+# [1] "Astro-NT NN" "Astro-TE NN" "Astro-WM NN"
+
+classes_use <- unique(groups$class) %>% setdiff(c("Nonneuron", "Pineal Gland"))
+#  [1] "THM GABA"       "BG"             "CNU-HTH GABA"   "THM Glut"       "HTH Glut"      
+#  [6] "CNU-HTH Glut"   "MB-HB Glut"     "MB-HB GABA"     "CTX-CGE GABA"   "CTX-MGE GABA"  
+# [11] "HTH GABA"       "HTH Hist"       "TEL Glut"       "SEP GABA"       "MB-HTH-HB Sero"
+
+regroups <- list("Other Nonneuerons" = {
+    filter(groups, class=="Nonneuron", !group %in% groups_use)$group
+})
+# $`Other Nonneuerons`
+#  [1] "Oligo OPALIN"  "Oligo PLEKHG1" "COP"           "ImOligo"       "OPC"          
+#  [6] "Ependymal"     "BAM"           "VLMC"          "Endo"          "ABC"          
+# [11] "Pericyte"      "SMC"           "Tanycyte"      "Microglia"  
+```
+
+I chose coordinates after looking in IGV.
+
+```{r}
+import_range <- GRanges(seqnames = "chr4", ranges = IRanges(134900000, 135170000))
+```
+
+```{r}
+bw <- sapply(groups_use, function(x) {
+    pth <- file.path(pdir_bw, "Subcortex_Group_v4/cpm", paste0(x, ".bw"))
+    import(pth, which = import_range)
+}, simplify = FALSE)
+
+bw <- c(bw, sapply(classes_use, function(x) {
+    pth <- file.path(pdir_bw, "Subcortex_Class_v4/cpm", paste0(x, ".bw"))
+    import(pth, which = import_range)
+}))
+```
+
+For the "regroups" (basically recombining all the Nonneurons together), will
+have to be done a little differently because the CPM normalization will be 
+broken. I will just average the CPM scores for each group within the region.
+
+```{r}
+bw_regroup <- sapply(regroups$`Other Nonneuerons`, function(x) {
+    pth <- file.path(pdir_bw, "Subcortex_Group_v4/cpm", paste0(x, ".bw"))
+    import(pth, which = import_range)
+}, simplify = FALSE)
+
+# divide CPM signal by number of groups before merging
+bw_regroup <- lapply(bw_regroup, function(x) {
+    score(x) <- score(x) / length(bw_regroup)
+    x
+})
+
+bw$`Other Nonneurons` <- BRGenomics::mergeGRangesData(bw_regroup)
+```
+
+We'll see how that works out.
+
+```{r}
+bw <- lapply(bw, makeGRangesBRG)
+```
+
+
+## Re-order
+
+```{r}
+track_ord <- c(
+    "Astro-TE NN",
+    "Astro-WM NN",
+    "Astro-NT NN",
+    "Other Nonneurons",
+    "TEL Glut",
+    "SEP GABA",
+    "BG",
+    "CNU-HTH GABA",
+    "CNU-HTH Glut",
+    "CTX-CGE GABA",
+    "CTX-MGE GABA",
+    "HTH GABA",
+    "HTH Glut",
+    "HTH Hist",
+    "MB-HB GABA",
+    "MB-HB Glut",
+    "MB-HTH-HB Sero",
+    "THM GABA",
+    "THM Glut"
+)
+bw <- bw[track_ord]
+```
+
+# Get useable annotations
+
+```{r}
+gns <- reduceByGene(gtf, gtf$gene)
+```
+
+also enhancers
+need to be a little hacky and edit this later, cuz they'll just show up as
+genes
+
+```{r}
+enhs <- GRanges(c(
+    "E1" = "chr4:135137891-135138392",
+    "E2" = "chr4:135137386-135137887",
+    "E3" = "chr4:135119184-135119685",
+    "E4" = "chr4:134932591-134933092"
+))
+strand(enhs) <- "*"
+```
+
+```{r}
+gns_ens <- c(gns, enhs)
+```
+
+
+# Make TxDb for plotting full gene models
+
+I think I can make the txdb object
+
+```{r}
+suppressPackageStartupMessages({
+#     library(AnnotationDbi)
+#     library(txdbmaker)
+    library(GenomicFeatures)
+})
+
+txdb <- txdbmaker::makeTxDbFromGRanges(gtf)
+
+# cache so you never rebuild it again
+# sqlfile <- file.path(pdir, "mCalJac_txdb.sqlite")
+# AnnotationDbi::saveDb(txdb, file = sqlfile)
+# later: txdb <- AnnotationDbi::loadDb(sqlfile)
+```
+
+# A Plotting theme element
+
+```{r}
+txt <- element_text(color = "black", size = 6, family = "ArialMT")
+```
+
+# (skip) scrap plots 
+
+w/ gene arrow
+
+```{r}
+p <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = import_range, 
+    binsize = 100, 
+    ylim = list(c(0, 6), c(0, 1)),
+    annotations = gns_ens, 
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+
+```{r}
+ggsave(
+    file.path("shot.pdf"),
+    p & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm" # that's target space but changing dims works better
+    width=90, height=90, units="mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path("shot2.pdf"),
+    p & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=100, height=70, units="mm"
+)
+```
+
+
+```{r}
+p2 <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = import_range, 
+    binsize = 100, 
+    ylim = list(c(0, 6), c(0, 1)),
+    annotations = txdb, 
+    # gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+```{r}
+ggsave(
+    file.path("shot2_genemodel.pdf"),
+    p2 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=100, height=70, units="mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path("shot2_genemodel2.pdf"),
+    p2 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=200, height=70, units="mm"
+)
+```
+
+let free y limits reign
+
+```{r}
+p3 <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = import_range, 
+    binsize = 100, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    annotations = txdb, 
+    # gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+```{r}
+ggsave(
+    file.path("shot3_genemodel.pdf"),
+    p3 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=200, height=70, units="mm"
+)
+```
+
+# Final plots
+
+```{r}
+p4 <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = import_range, 
+    binsize = 250, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    annotations = txdb, 
+    # gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+```{r}
+ggsave(
+    file.path("shot4_genemodel.pdf"),
+    p4 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=200, height=70, units="mm"
+)
+```
+
+also need that without the gene model, because it has the enhancer locations marked
+
+```{r}
+p4_enh <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = import_range, 
+    binsize = 250, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("shot4.pdf"),
+    p4_enh & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=170, height=70, units="mm"
+)
+```
+
+
+# Summary
+
+In the end it's browser shot4 being used, with the genemodel being resized
+and substituted in for the genearrow, but the genearrow plot being the one 
+used because it marks the exact enhancer locations.
+
+# Version 2 (with zooms)
+
+The entire region being plotted results in the individual peaks being really
+small. So I will try to make a new version that zooms in on several loci.
+
+One thing I need to figure out is how to show the entire region up to. One
+idea is showing loops, which I can make simply in Illustrator.
+
+But for that, I need a plot that shows the gene, each of the enhancers, and the
+zoom regions being used.
+
+
+```{r}
+subsetByOverlaps(gns_ens, import_range)
+```
+
+## Plot whole region with zooms
+
+```{r}
+# zoom1 = 10kb upstream MOXD1 TSS to 10kb downstream of E3 [=38.982kb]
+# zoom2 = 10kb upstream to 10kb downstream of E4
+zooms <- GRanges("chr4", IRanges(
+    c(135109184, 134922591),
+    c(135148166, 134943092)
+))
+names(zooms) <- c("zoom1", "zoom2")
+
+p_region_zoom1 <- shot_genearrow(
+    import_range,
+    c(gns_ens, zooms),
+    gene_names = c(names(gns_ens), names(zooms))
+)
+```
+
+```{r}
+ggsave(
+    file.path("zoom_wholeRegion1.pdf"),
+    p_region_zoom1 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=170, height=30, units="mm"
+)
+```
+
+also need the gene model
+
+```{r}
+p_region_mod <- shot_genemodel(
+    import_range,
+    txdb
+)
+```
+
+```{r}
+ggsave(
+    file.path("zoom_wholeRegion1_mod.pdf"),
+    p_region_mod & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=170, height=30, units="mm"
+)
+```
+
+
+## Plot zoom 1
+
+
+```{r}
+# > width(import_range)
+# [1] 270001
+# > width(zooms)
+# [1] 38983 20502
+# 
+# > width(import_range) / 250 # 250 bp bins used above
+# [1] 1080.004
+# 
+# > width(zooms) / 50 # if use 50 bp bins
+# [1] 779.66 410.04
+```
+
+
+```{r}
+p_zoom_r1_z1_mod <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[1], 
+    binsize = 50, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    annotations = txdb, 
+    # gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom1_genemodel.pdf"),
+    p_zoom_r1_z1_mod & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=150, height=70, units="mm"
+)
+```
+
+also need that without the gene model, because it has the enhancer locations marked
+
+```{r}
+p_zoom_r1_z1_enh <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[1], 
+    binsize = 50, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom1_enhancers.pdf"),
+    p_zoom_r1_z1_enh & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=175, height=70, units="mm"
+)
+```
+
+### with tall zooming (all to 3.5)
+
+cCRE3 will disappear basically in tel glut but the astro heights will be 
+apparent
+
+
+```{r}
+p_zoom_r1_z1_enh_tall <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[1], 
+    binsize = 50, 
+    ylim = list(c(0, 3.5), c(0, 3.5)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom1_enhancers_tallVersion.pdf"),
+    p_zoom_r1_z1_enh_tall & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=175, height=70, units="mm"
+)
+```
+
+also do a short version (all 0.35)
+
+
+
+```{r}
+p_zoom_r1_z1_enh_short <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[1], 
+    binsize = 50, 
+    ylim = list(c(0, 0.35), c(0, 0.35)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom1_enhancers_shortVersion.pdf"),
+    p_zoom_r1_z1_enh_short & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=175, height=70, units="mm"
+)
+```
+
+## Plot zoom 2
+
+don't need the gene model for the second zoom (no genes)
+
+```{r}
+p_zoom_r1_z2_enh <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[2], 
+    binsize = 50, 
+    # ylim = list(c(0, 6), c(0, 1)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom2_enhancers.pdf"),
+    p_zoom_r1_z2_enh & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=95, height=70, units="mm"
+)
+```
+
+um redo with fixed ylim
+
+```{r}
+p_zoom_r1_z2_enh_2 <- plot_shot(
+    bw[1:3],
+    bw[4:(length(bw))],
+    region = zooms[2], 
+    binsize = 50, 
+    ylim = list(c(0, 0.35), c(0, 0.35)),
+    # annotations = txdb, 
+    annotations = gns_ens,
+    gene_names = names(gns_ens),
+    model_height = 3,
+    expand_ranges = FALSE
+)
+```
+
+(they don't come out to the same size b/c label size/location changes, but
+not a problem in Illustrator)
+
+```{r}
+ggsave(
+    file.path("zoom_Region1_zoom2_enhancers_2.pdf"),
+    p_zoom_r1_z2_enh_2 & theme(
+        axis.text.y = txt,
+        strip.text = txt
+    ),
+    # width=90, height=60, units="mm"
+    width=95, height=70, units="mm"
+)
+```
+

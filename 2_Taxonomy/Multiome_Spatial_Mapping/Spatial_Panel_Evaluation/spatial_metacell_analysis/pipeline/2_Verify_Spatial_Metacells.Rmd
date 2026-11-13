@@ -1,0 +1,2127 @@
+---
+title: "2_Verify_Spatial_Metacells"
+output: html_document
+date: "2026-02-20"
+---
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    # library(circlize)
+    # library(RColorBrewer)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+    # library(viridisLite)
+    # library(grid)
+    # library(igraph)
+    # library(ggraph)
+    # library(scales)
+    # library(tibble)
+    # library(tidyr)
+    # library(purrr)
+    # library(stringr)
+    # library(GenomicRanges)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),  # was size 8 in other notebooks?
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        complete = TRUE
+    )
+}
+
+theme_md_bw <- function() {
+    theme_bw(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),
+        strip.text.y = element_text(angle = 0),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, color = "black"),
+        complete = TRUE
+    )
+}
+```
+
+## Utilities
+
+### CPM normalization
+
+```{r}
+# rows are features, columns are samples
+cpm <- function(mat) {
+    t(1e6 * t(mat) / colSums(mat))
+}
+```
+
+### Z-scoring
+
+not used
+
+```{r}
+# z-score each row in matrix
+scale_rows <- function(m) {
+    t(scale(t(m)))
+}
+```
+
+## Paths/imports
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+outdir <- file.path(pdir, "spatial_metacell_analysis")
+
+pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"
+
+pdir_plots <- file.path(outdir, "plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+```
+
+```{r}
+# obs, color palettes
+# path_obs <- file.path(pdir_meta, "preprint_freeze/subcortex_anno_table_preprint.csv")
+# path_palettes <- file.path(pdir_meta, "preprint_freeze/color_palette.csv")
+path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
+path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
+
+# multiome rna pseudobulk/metacell matrix
+path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_genes_matrix.csv"
+
+# spatial pseudobulk/metacell matrix
+path_spatial_by_cl_raw <- file.path(outdir, 'data/spatial_pseudobulk_Cluster_v4.csv')
+
+# genes in spatial panel [not really needed]
+path_spatial_panel <- '/Volumes/krienen/lab_members/daisy/hmba/xenium_genes_2024.csv'
+path_hvgs      <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/preprint_freeze/RNA_HVG_4K_preprint_freeze.csv"
+```
+
+## Imports
+
+```{r}
+# multiome rna
+rna_by_cl_raw <- data.table::fread(path_rna_by_cl_raw, header=TRUE)
+rnames        <- rna_by_cl_raw[[1]]
+rna_by_cl_raw <- as.matrix(rna_by_cl_raw[,-1])
+rownames(rna_by_cl_raw) <- rnames
+```
+
+```{r}
+# spatial rna
+spatial_by_cl_raw <- read.csv(path_spatial_by_cl_raw, row.names="X")
+spatial_by_cl_raw <- as.matrix(spatial_by_cl_raw)
+
+# apparently 8 spatial metacells with 0 counts, not sure how they got in
+spatial_by_cl_raw <- spatial_by_cl_raw[, !colSums(spatial_by_cl_raw) == 0]
+```
+
+```{r}
+# obs will align with the full multiome pseudobulk matrix but will later
+# subset to align spatial & multiome clusters, but won't align obs to that
+obs <- read.csv(path_obs, row.names = "marm_cluster_id")
+obs$inconclusive_mapping <- as.logical(toupper(obs$inconclusive_mapping))
+# > nrow(obs)
+# [1] 1737
+
+#### lacks Junk; and these are clusters excluded for the analysis set:
+# > table(obs$inconclusive_mapping)
+# False  True 
+#  1642    95 
+
+# > all(rownames(obs) %in% colnames(rna_by_cl_raw))
+# [1] TRUE
+
+### will subset below
+```
+
+```{r}
+# color palettes
+pal_df <- read.csv(path_palettes)
+
+palettes <- split(pal_df, pal_df$Type) %>% 
+    lapply(function(x) setNames(x$color_hex, x$Name))
+# > palettes$Class
+#         BG   CNU-HTH GABA   CNU-HTH Glut       HTH GABA       HTH Glut       HTH Hist 
+#  "#CBC3E3"      "#E69F00"      "#56B4E9"      "#F0E442"      "#0072B2"      "#D55E00" 
+# MB-HB GABA     MB-HB Glut MB-HTH-HB Sero      Nonneuron   Pineal Gland       SEP GABA 
+#  "#CC79A7"      "#44AA99"      "#AA4499"      "#999999"      "#B3C65C"      "#882255" 
+#   TEL Glut       THM GABA       THM Glut           <NA> 
+#  "#88CCEE"      "#DDCC77"      "#332288"      "#7f7f7f" 
+```
+
+```{r}
+# not needed (they're in the spatial pseudobulk matrix)
+panel_gns <- read.csv(path_spatial_panel)[[1]]
+hvgs <- read.csv(path_hvgs)[[1]]
+```
+
+
+## Subset RNA & obs [overwrite]
+
+Drop clusters with `inconclusive_mapping`.
+
+```{r}
+obs <- subset(obs, !inconclusive_mapping)
+# > nrow(obs)
+# [1] 1642
+```
+
+```{r}
+rna_by_cl_raw  <- rna_by_cl_raw[,  rownames(obs)]
+```
+
+## CPM normalize matrices
+
+```{r}
+rna_by_cl_cpm  <- cpm(rna_by_cl_raw)
+# > dim(rna_by_cl_cpm)
+# [1] 35787  1642
+```
+
+
+```{r}
+spatial_by_cl_cpm <- cpm(spatial_by_cl_raw)
+# > dim(spatial_by_cl_cpm)
+# [1]  300 1712
+```
+
+## Get aligned versions of spatial & multiome RNA
+
+```{r}
+common_clusts <- intersect(colnames(spatial_by_cl_cpm), colnames(rna_by_cl_cpm))
+common_genes  <- intersect(rownames(spatial_by_cl_cpm), rownames(rna_by_cl_cpm))
+
+# > length(common_clusts)
+# [1] 1620
+# > length(common_genes)
+# [1] 300
+```
+
+only 1620 of 1642 clusters used. which aren't used?
+
+```{r}
+cat("Clusters without spatial alignment:\n\n")
+setdiff(rownames(obs), common_clusts) %>% 
+    sapply(function(cl) obs[cl, "Subcortex_Group_v4"]) %>% 
+    (function(x) data.frame(cluster = names(x), group = unname(x))) %>% 
+    print.data.frame
+```
+
+```
+Clusters without spatial alignment:
+
+        cluster                         group
+1    cluster_22                      THM GABA
+2   cluster_119            STRd D2 Matrix MSN
+3   cluster_292          STH PVALB-PITX2 Glut
+4   cluster_317                  VTR-HTH Glut
+5   cluster_357                      PAG Glut
+6   cluster_358                      PAG Glut
+7   cluster_510            PHN GSX1-DLK1 GABA
+8   cluster_593        L4-5 IT CTX-PArCx Glut
+9   cluster_968    LH-EXA OTP-FEZF1-EBF2 Glut
+10  cluster_971    LH-EXA OTP-FEZF1-EBF2 Glut
+11  cluster_975      AHN OTP-FEZF1-ITGA8 Glut
+12 cluster_1136              L2-3 IT RSC Glut
+13 cluster_1143                       DG Glut
+14 cluster_1239               AAA-Me-BST Glut
+15 cluster_1312    BST-EA-HTH SAMD3-TP73 Glut
+16 cluster_1440                  VTR-HTH Glut
+17 cluster_1616 HTHtu-MPA-MeR FEZF1-ESR1 Glut
+18 cluster_1620 HTHtu-MPA-MeR FEZF1-ESR1 Glut
+19 cluster_1637             SN-VTR CALB1 Dopa
+20 cluster_1671                  HB FAT2 Glut
+21 cluster_1719           MB-HB OTP-PAX3 GABA
+22 cluster_1759        SC-PAG PAX7-CDH23 GABA
+```
+
+
+```{r}
+# matched pseudobulk matrices (same rows/columns)
+matched_pb_mats <- list(
+    multiome = rna_by_cl_cpm[common_genes, ][, common_clusts],
+    spatial  = spatial_by_cl_cpm[common_genes, ][, common_clusts]
+)
+```
+
+## Also get a matched multiome version for 4k HVGs vs. spatial panel genes
+
+```{r}
+multi_mats_for_sets <- list(
+    HVGs  = rna_by_cl_cpm[hvgs, ],
+    panel = rna_by_cl_cpm[panel_gns, ]
+)
+```
+
+
+# Multiome cluster distances in panel vs. HVGs
+
+To answer reviewer question about "if they would produce similar clustering"
+or whatever
+
+## in just gene-expression space
+
+i guess first i'll just do in gene expression space
+
+```{r}
+multi_mats_for_sets %>% 
+    lapply(log1p) %>% 
+    lapply(t) %>% 
+    lapply(dist) -> 
+    multi_mats_for_sets_dists
+```
+
+```{r}
+multi_mats_for_sets_dists[[1]] %>% as.matrix %>% .[1:3,1:3]
+```
+
+### all clusters
+
+```{r}
+multi_mats_for_sets_dists %>% 
+    lapply(as.vector) %>%
+    do.call(cbind, .) %>% 
+    as.data.frame %>% 
+    setNames(c("HVGs", "panel")) ->
+    df_gsets_gexp_dist
+```
+
+```{r}
+ggplot(df_gsets_gexp_dist, aes(HVGs, panel)) +
+    # geom_point() + 
+    geom_hex(bins=100) + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor() + 
+    labs(
+        title = "Cluster Pairwise Distances\nin Gene Expression Space",
+        x = "4k HVGs", y = "300 Gene Spatial Panel", fill="Cluster Pairs"
+    ) + 
+    theme_md_classic()
+```
+
+R=0.98
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_genesets_cl_pairwise_gexp_dist_all_cl.pdf"),
+    width=60, height=45, units="mm"
+)
+```
+
+#### Mantel test
+
+```{r}
+all_cl_mantel <- vegan::mantel(
+    multi_mats_for_sets_dists$HVGs,
+    multi_mats_for_sets_dists$panel,
+    method = "pearson",
+    permutations = 5e3
+)
+```
+
+kind of pointless, just a significance test on what i already have, and the
+p-val adds nothing
+
+```
+Mantel statistic based on Pearson's product-moment correlation 
+
+Call:
+vegan::mantel(xdis = multi_mats_for_sets_dists$HVGs, ydis = multi_mats_for_sets_dists$panel,      method = "pearson", permutations = 5000) 
+
+Mantel statistic r: 0.9786 
+      Significance: 0.00019996 
+
+Upper quantiles of permutations (null model):
+   90%    95%  97.5%    99% 
+0.0239 0.0314 0.0386 0.0463 
+Permutation: free
+Number of permutations: 5000
+```
+
+
+### just neurons vs. non-neurons?
+
+```{r}
+obs %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) split(x$cluster, x$Subcortex_Class_v4=="Nonneuron")) %>% 
+    (function(x) {
+        stopifnot(identical(names(x), c("FALSE", "TRUE")))
+        x
+    }) %>% 
+    setNames(c("Neurons", "Nonneurons")) %>% 
+    lapply(function(cl) {
+        multi_mats_for_sets_dists %>% 
+            lapply(as.matrix) %>% 
+            lapply(function(x) x[cl, cl]) %>% 
+            lapply(function(x) x[upper.tri(x)]) %>% 
+            do.call(cbind, .) %>% 
+            as.data.frame %>% 
+            setNames(c("HVGs", "panel"))
+    }) %>% 
+    Map(function(x, nm) mutate(x, grping = nm), ., names(.)) %>% 
+    unname %>% 
+    do.call(rbind, .) ->
+    df_gsets_gexp_dist_by_neur_vs_glia
+```
+
+```{r}
+ggplot(df_gsets_gexp_dist_by_neur_vs_glia, aes(HVGs, panel)) +
+    facet_wrap(~grping) + 
+    geom_hex(bins=100) + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor() + 
+    labs(
+        title = "Cluster Pairwise Distances\nin Gene Expression Space",
+        x = "4k HVGs", y = "300 Gene Spatial Panel", fill="Cluster Pairs"
+    ) + 
+    theme_md_bw()
+```
+
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_genesets_cl_pairwise_gexp_dist_split_neur_glia.pdf"),
+    width=80, height=45, units="mm"
+)
+```
+
+
+### split by class
+
+```{r}
+obs %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) split(x$cluster, x$Subcortex_Class_v4)) %>% 
+    lapply(function(cl) {
+        multi_mats_for_sets_dists %>% 
+            lapply(as.matrix) %>% 
+            lapply(function(x) x[cl, cl]) %>% 
+            # lapply(as.vector) %>% 
+            lapply(function(x) x[upper.tri(x)]) %>% 
+            do.call(cbind, .) %>% 
+            as.data.frame %>% 
+            setNames(c("HVGs", "panel"))
+    }) %>% 
+    Map(function(x, nm) mutate(x, Class = nm), ., names(.)) %>% 
+    unname %>% 
+    do.call(rbind, .) ->
+    df_gsets_gexp_dist_by_class
+```
+
+
+```{r}
+df_gsets_gexp_dist_by_class %>% 
+    filter(!Class=="HTH Hist") %>% 
+    ggplot(aes(HVGs, panel)) +
+    facet_wrap(~Class, scales="free") + 
+    geom_hex() + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+    labs(
+        title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in log1p(CPM) space)",
+        x = "4k HVGs",
+        y = "300 Spatial Panel Genes",
+        fill = "clusters"
+    ) + 
+    theme_md_bw()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_genesets_cl_pairwise_gexp_dist_by_class.pdf"),
+    width=120, height=80, units="mm"
+)
+```
+
+### split glia by group
+
+do the same for the nonneuron groups
+
+```{r}
+obs %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    filter(Subcortex_Class_v4 == "Nonneuron") %>% 
+    (function(x) split(x$cluster, x$Subcortex_Group_v4)) %>% 
+    lapply(function(cl) {
+        multi_mats_for_sets_dists %>% 
+            lapply(as.matrix) %>% 
+            lapply(function(x) x[cl, cl]) %>% 
+            # lapply(as.vector) %>% 
+            lapply(function(x) x[upper.tri(x)]) %>% 
+            do.call(cbind, .) %>% 
+            as.data.frame %>% 
+            setNames(c("HVGs", "panel"))
+    }) %>% 
+    Map(function(x, nm) mutate(x, Group = nm), ., names(.)) %>% 
+    unname %>% 
+    do.call(rbind, .) ->
+    df_gsets_gexp_dist_by_glia_groups
+```
+
+
+```{r}
+df_gsets_gexp_dist_by_glia_groups %>% 
+    filter(!Group %in% c("OPC", "Pericyte", "SMC", "Tanycyte")) %>% 
+    ggplot(aes(HVGs, panel)) +
+    facet_wrap(~Group, scales="free") + 
+    geom_hex() + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+    labs(
+        title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in log1p(CPM) space)",
+        x = "4k HVGs",
+        y = "300 Spatial Panel Genes",
+        fill = "clusters"
+    ) + 
+    theme_md_bw()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_genesets_cl_pairwise_gexp_dist_glia_by_group.pdf"),
+    width=120, height=80, units="mm"
+)
+```
+
+### make one big combined plot
+
+allow redundant categories, so have "All clusters", all classes (including 
+"nonneurons"), but then also have group-level glia.
+
+```{r}
+rbind(
+    mutate(df_gsets_gexp_dist, grouping = "All Clusters"),
+    dplyr::rename(df_gsets_gexp_dist_by_class, grouping = Class),
+    dplyr::rename(df_gsets_gexp_dist_by_glia_groups, grouping = Group)
+) %>% 
+    # filter(!grouping %in% c("HTH Hist", "OPC", "Pericyte", "SMC", "Tanycyte")) %>% 
+    ggplot(aes(HVGs, panel)) +
+    facet_wrap(~grouping, scales="free") + 
+    geom_hex() + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+    labs(
+        title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in log1p(CPM) space)",
+        x = "4k HVGs",
+        y = "300 Spatial Panel Genes",
+        fill = "Cluster Pairs"
+    ) + 
+    theme_md_bw()
+```
+
+
+```{r}
+rbind(
+    mutate(df_gsets_gexp_dist, grouping = "All Clusters"),
+    dplyr::rename(df_gsets_gexp_dist_by_class, grouping = Class),
+    dplyr::rename(df_gsets_gexp_dist_by_glia_groups, grouping = Group)
+) %>% 
+    filter(!grouping %in% c("ABC")) %>% 
+    ggplot(aes(HVGs, panel)) +
+    facet_wrap(~grouping, scales="free") + 
+    geom_hex() + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+    labs(
+        title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in gene expression space)",
+        x = "4k HVGs",
+        y = "300 Spatial Panel Genes",
+        fill = "Cluster Pairs"
+    ) + 
+    theme_md_bw()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_genesets_cl_pairwise_gexp_dist_by_class_and_gliagroups.pdf"),
+    width=150, height=100, units="mm"
+)
+```
+
+
+```{r}
+rbind(
+    mutate(df_gsets_gexp_dist, grouping = "All Clusters"),
+    dplyr::rename(df_gsets_gexp_dist_by_class, grouping = Class),
+    dplyr::rename(df_gsets_gexp_dist_by_glia_groups, grouping = Group)
+) %>% 
+    filter(!grouping %in% c("HTH Hist", "OPC", "Pericyte", "SMC", "Tanycyte")) %>% 
+    filter(!grouping=="All Clusters") %>% 
+    group_by(grouping) %>% 
+    summarize(
+        med_dist = median(HVGs),
+        cor = cor(HVGs, panel),
+        size = length(HVGs)
+    ) %>% 
+    .$cor %>% mean
+# [1] 0.9771308
+```
+
+
+### Get correlations across all groups
+
+#### split by group
+
+want to see the distribution
+
+```{r}
+obs %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) split(x$cluster, x$Subcortex_Group_v4)) %>% 
+    lapply(function(cl) {
+        multi_mats_for_sets_dists %>% 
+            lapply(as.matrix) %>% 
+            lapply(function(x) x[cl, cl]) %>% 
+            lapply(function(x) x[upper.tri(x)]) %>% # no redundant or self-self
+            do.call(cbind, .) %>% 
+            as.data.frame %>% 
+            setNames(c("HVGs", "panel"))
+    }) %>% 
+    Map(function(x, nm) mutate(x, Group = nm), ., names(.)) %>% 
+    unname %>% 
+    do.call(rbind, .) ->
+    df_gsets_gexp_dist_by_group
+```
+
+```{r}
+# do for any Group with 3+ clusters:
+# (1 is impossible, 2 is R=1 so that's cheating)
+df_gsets_gexp_dist_by_group %>% 
+    # only look at Groups with at least 3+ clusters
+    filter(
+        Group %in% { table(obs$Subcortex_Group_v4) %>% .[.>2] %>% names }
+    ) %>% 
+    group_by(Group) %>% 
+    summarize(cor = cor(HVGs, panel)) %>% 
+    .$cor %>% 
+    summary
+#   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 0.7942  0.9300  0.9499  0.9447  0.9715  1.0000 
+
+df_gsets_gexp_dist_by_group %>% 
+    # only look at Groups with at least 2+ clusters
+    filter(
+        Group %in% { table(obs$Subcortex_Group_v4) %>% .[.>2] %>% names }
+    ) %>% 
+    group_by(Group) %>% 
+    summarize(cor = cor(HVGs, panel)) %>% 
+    .$cor %>% 
+    sd
+# [1] 0.04030681
+```
+
+
+correlation across groups is 0.95 ± 0.04
+
+```{r}
+df_gsets_gexp_dist_by_group %>% 
+    # only look at Groups with at least 3 clusters
+    filter(
+        Group %in% { table(obs$Subcortex_Group_v4) %>% .[.>2] %>% names }
+    ) %>% 
+    group_by(Group) %>% 
+    summarize(cor = cor(HVGs, panel)) %>% 
+    ggplot(aes(cor)) + 
+    geom_boxplot() + 
+    theme_md_classic()
+```
+
+outliers?
+
+```{r}
+df_gsets_gexp_dist_by_group %>% 
+    # only look at Groups with at least 3 clusters
+    filter(
+        Group %in% { table(obs$Subcortex_Group_v4) %>% .[.>2] %>% names }
+    ) %>% 
+    group_by(Group) %>% 
+    summarize(cor = cor(HVGs, panel)) %>% 
+    arrange(cor)
+```
+
+
+#### Mantel tests?
+
+
+
+### (skip) Focus in on only the closest distances?
+
+```{r}
+df_gsets_gexp_dist %>% 
+    filter(
+        rank(HVGs) < 5e4 #| rank(panel) < 1e5
+    ) %>% 
+    ggplot(aes(HVGs, panel)) +
+    geom_hex() + 
+    scale_fill_viridis_c(trans="log10") + 
+    geom_smooth(method="lm") + 
+    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+    labs(
+        title = "Cluster Pairwise Distances by Gene Set:\nClosest Cluster Pairs Only",
+        x = "4k HVGs",
+        y = "300 Spatial Panel Genes",
+        fill = "clusters"
+    ) + 
+    theme_md_bw()
+```
+
+doesn't make it look better....
+
+
+## [SKIP] in PCA space?
+
+### single pca space
+
+single PCA space for all clusters, which i guess is fine...
+
+```{r}
+# multi_mats_for_sets %>% 
+#     lapply(log1p) %>% 
+#     lapply(scale_rows) %>% 
+#     lapply(prcomp) ->
+#     multi_mats_for_sets_pca
+# 
+# multi_mats_for_sets_pca %>% 
+#     lapply("[[", "rotation") %>% 
+#     lapply(. %>% .[, 1:20]) %>% # top 20 PCs
+#     lapply(dist) ->
+#     multi_mats_for_sets_dists_pca
+# 
+# multi_mats_for_sets_dists_pca %>% 
+#     lapply(as.vector) %>% 
+#     do.call(cbind, .) %>% 
+#     as.data.frame %>% 
+#     setNames(c("HVGs", "panel")) ->
+#     df_gsets_pca_dist
+```
+
+```{r}
+# ggplot(df_gsets_pca_dist, aes(HVGs, panel)) +
+#     geom_hex() + 
+#     scale_fill_viridis_c(trans="log10") + 
+#     geom_smooth(method="lm") + 
+#     ggpubr::stat_cor() + 
+#     theme_md_classic()
+```
+
+### do fully separated
+
+```{r}
+# obs %>% 
+#     tibble::rownames_to_column("cluster") %>% 
+#     (function(df) {
+#         glia <- filter(df, Subcortex_Class_v4=="Nonneuron")
+#         neur <- filter(df, Subcortex_Class_v4!="Nonneuron")
+#         c(
+#             split(neur$cluster, neur$Subcortex_Class_v4),
+#             split(glia$cluster, glia$Subcortex_Group_v4)
+#         )
+#     }) %>% 
+#     .[lengths(.)>1] %>% 
+#     lapply(function(cl) {
+#         multi_mats_for_sets %>% 
+#             # subset after z-scoring...?
+#             lapply(log1p) %>% 
+#             lapply(scale_rows) %>% 
+#             lapply(function(x) x[, cl]) %>% 
+#             lapply(prcomp) %>%
+#             lapply("[[", "rotation") %>%
+#             lapply(function(x) x[, 1:min(20, ncol(x))]) %>% # cap at 20 PCs
+#             lapply(dist) %>%
+#             lapply(as.vector) %>%
+#             do.call(cbind, .) %>%
+#             as.data.frame %>%
+#             setNames(c("HVGs", "panel"))
+#     }) %>% 
+#     # identity -> tmp
+#     Map(function(x, nm) mutate(x, grouping = nm), ., names(.)) %>%
+#     unname %>%
+#     do.call(rbind, .) ->
+#     df_gsets_pca_dist_by_neurclass_gliagroup
+```
+
+```{r}
+# df_gsets_pca_dist_by_neurclass_gliagroup %>% 
+#     ggplot(aes(HVGs, panel)) +
+#     facet_wrap(~grouping, scales="free") + 
+#     geom_hex() + 
+#     scale_fill_viridis_c(trans="log10") + 
+#     geom_smooth(method="lm") + 
+#     ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
+#     labs(
+#         title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in PCA space)",
+#         x = "4k HVGs",
+#         y = "300 Spatial Panel Genes",
+#         fill = "clusters"
+#     ) + 
+#     theme_md_bw()
+```
+
+
+# Check on panel gene variance
+
+like, the reviewer wants to know "how many of the genes are differentially
+expressed between the clusters"
+
+```{r}
+var_df <- rbind(
+    tibble::rownames_to_column(
+        data.frame(
+            var = apply(log1p(rna_by_cl_cpm[panel_gns, ]), 1, var), 
+            set = "Spatial Panel"
+        ),
+        "gene"
+    ),
+    tibble::rownames_to_column(
+        data.frame(
+            var = apply(log1p(rna_by_cl_cpm[hvgs, ]), 1, var), 
+            set = "4k HVGs"
+        ),
+        "gene"
+    )
+)
+```
+
+
+```{r}
+var_df %>% 
+    ggplot(
+        aes(var, color = set, fill = set)
+    ) + 
+    geom_density(alpha=0.25) + 
+    # scale_x_continuous(labels = scales::math_format(2^.x)) + 
+    labs(
+        x = "gene variance across clusters",
+        color = "gene set",
+        fill = "gene set"
+    ) + 
+    theme_md_classic() + 
+    theme(legend.key.size = unit(3, "mm"))
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "panel_vs_hvg_gene_variance.pdf"),
+    width=80, height=40, units="mm"
+)
+```
+
+```{r}
+var_df %>% 
+    ggplot(
+        aes(var, set)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x = "gene variance across clusters",
+        y = NULL
+    ) + 
+    theme_md_classic()
+```
+
+Umm, let's just compare means or medians or something or percentiles...
+
+```{r}
+var_df %>% 
+    group_by(set) %>% 
+    summarize(median = median(var), mean = mean(var)) %>% 
+    print.data.frame
+#             set    median     mean
+# 1       4k HVGs 0.8329994 1.047149
+# 2 Spatial Panel 1.5484388 1.674172
+```
+
+```{r}
+split(var_df$var, var_df$set) %>% 
+    lapply(sort) %>% 
+    lapply(function(x) min(which(x > 1.5484388)) / length(x))
+# $`4k HVGs`
+# [1] 0.7695
+# 
+# $`Spatial Panel`
+# [1] 0.5033333
+
+split(var_df$var, var_df$set) %>% 
+    lapply(sort) %>% 
+    lapply(function(x) min(which(x > 0.8329994)) / length(x))
+# $`4k HVGs`
+# [1] 0.50025
+# 
+# $`Spatial Panel`
+# [1] 0.32
+```
+
+### Percentiles
+
+```{r}
+var_all <- tibble::rownames_to_column(
+    data.frame(
+        var = apply(log1p(rna_by_cl_cpm), 1, var)
+    ),
+    "gene"
+) %>% 
+    arrange(var) %>% 
+    mutate(rank_pct = rank(var) / length(var))
+```
+
+
+```{r}
+rbind(
+    mutate(filter(var_all, gene %in% hvgs), set = "4k HVGs"),
+    mutate(filter(var_all, gene %in% panel_gns), set = "Spatial Panel")
+) %>% 
+    group_by(set) %>% 
+    summarize(median(rank_pct)) %>% 
+    print.data.frame
+#             set median(rank_pct)
+# 1       4k HVGs        0.9176377
+# 2 Spatial Panel        0.9712885
+```
+
+```{r}
+rbind(
+    mutate(filter(var_all, gene %in% hvgs), set = "4k HVGs"),
+    mutate(filter(var_all, gene %in% panel_gns), set = "Spatial Panel")
+) %>% 
+    # mutate(
+    #     set = sub("Spatial Panel", "Spatial Panel Genes", set)
+    # ) %>% 
+    ggplot(
+        aes(set, rank_pct)
+    ) + 
+    geom_boxplot(outlier.size = 0.25) + 
+    scale_y_continuous(labels = scales::percent) + 
+    labs(
+        y = "Gene Cross-Cluster Variance Percentile",
+        x = NULL
+    ) + 
+    theme_md_classic() + 
+    theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1))
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "panel_vs_hvg_gene_variance_percentile.pdf"),
+    width=25, height=45, units="mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "panel_vs_hvg_gene_variance_percentile2.pdf"),
+    width=20, height=35, units="mm"
+)
+```
+
+# Check on panel gene expression
+
+## Gene expression quantiles
+
+```{r}
+rna_by_cl_pctile <- apply(rna_by_cl_cpm, 2, function(x) rank(x) / length(x))
+```
+
+### Boxplot means
+
+for each gene, take mean expression quantile across all clusters
+
+```{r}
+rbind(
+    data.frame(quants = rowMeans(rna_by_cl_pctile), set = "All Genes"),
+    data.frame(quants = rowMeans(rna_by_cl_pctile[panel_gns, ]), set = "Spatial Panel"),
+    data.frame(quants = rowMeans(rna_by_cl_pctile[hvgs, ]), set = "4k HVGs")
+) %>% 
+    mutate(
+        set = factor(set, levels = c("All Genes", "4k HVGs", "Spatial Panel"))
+    ) %>% 
+    ggplot(
+        aes(set, quants)
+    ) + 
+    geom_boxplot(outlier.size = 0.25) + 
+    labs(
+        y = "Gene Mean Expression Quantile\n(Across All Clusters)",
+        x = NULL
+    ) + 
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent) + 
+    theme_md_classic() + 
+    theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1))
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "panel_vs_hvg_gene_expression_percentile.pdf"),
+    width=25, height=45, units="mm"
+)
+```
+
+skip "all genes"
+
+```{r}
+rbind(
+    # data.frame(quants = rowMeans(rna_by_cl_pctile), set = "All Genes"),
+    data.frame(quants = rowMeans(rna_by_cl_pctile[panel_gns, ]), set = "Spatial Panel"),
+    data.frame(quants = rowMeans(rna_by_cl_pctile[hvgs, ]), set = "4k HVGs")
+) %>% 
+    # mutate(
+    #     set = factor(set, levels = c("All Genes", "4k HVGs", "Spatial Panel"))
+    # ) %>% 
+    ggplot(
+        aes(set, quants)
+    ) + 
+    geom_boxplot(outlier.size=0.25) + 
+    labs(
+        y = "Mean Expression Quantile",
+        x = NULL
+    ) + 
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent) + 
+    theme_md_classic() + 
+    theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1))
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "panel_vs_hvg_gene_expression_percentile2.pdf"),
+    width=20, height=35, units="mm"
+)
+```
+
+## Plot exp vs. variance percentile?
+
+```{r}
+rbind(
+    mutate(filter(var_all, gene %in% hvgs), set = "4k HVGs"),
+    mutate(filter(var_all, gene %in% panel_gns), set = "Spatial Panel")
+) %>% 
+    transmute(gene, set, var = rank_pct) %>% 
+    left_join(
+        tibble::rownames_to_column(
+            rbind(
+                data.frame(exp = rowMeans(rna_by_cl_pctile[panel_gns, ]), set = "Spatial Panel"),
+                data.frame(exp = rowMeans(rna_by_cl_pctile[hvgs, ]), set = "4k HVGs")
+            ),
+            "gene"
+        ),
+        by = c("gene", "set")
+    ) %>% 
+    ggplot(
+        aes(exp, var, color = set)
+    ) + 
+    geom_point(shape=16) + 
+    theme_md_classic()
+```
+
+## try to call expression at the cluster level
+
+umm, maybe, for all genes, calculate the expression percentile within each 
+cluster, and find the number of panel genes in the top 30%?
+
+saying 25% of genes are expressed is a conservative threshold (often estimates
+are 50%). then, for each cluster, we'll ask how many spatial panel genes are
+
+
+```{r}
+# top 25th percentile
+top_25p_genes_by_cluster <- apply(
+    rna_by_cl_pctile, 2, function(x) names(x)[x>0.75]
+)
+
+# top 10th percentile
+top_10p_genes_by_cluster <- apply(
+    rna_by_cl_pctile, 2, function(x) names(x)[x>0.75]
+)
+```
+
+```{r}
+# < range(lengths(top_25p_genes_by_cluster))
+# [1] 7994 9816
+
+sapply(top_25p_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    summary
+#  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 109.0   194.0   206.0   202.9   215.0   258.0 
+```
+
+(Also check top 10%):
+
+```{r}
+sapply(top_10p_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    summary
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   87     154     162     160     169     201
+```
+
+```{r}
+sapply(top_10p_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    sd
+# [1] 18.17692
+```
+
+
+```{r}
+sapply(top_25p_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    data.frame %>% 
+    setNames("genes") %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) {
+        x$Class <- obs[x$cluster, "Subcortex_Class_v4"]
+        x
+    }) %>% 
+    ggplot(aes(Class, genes)) + 
+    geom_boxplot() + 
+    theme_md_classic() + 
+    labs(
+        y = "no. spatial panel genes in top 25%\nby expression within each cluster"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    )
+```
+
+also do for non-neuron groups:
+
+```{r}
+sapply(top_25p_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    data.frame %>% 
+    setNames("genes") %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) {
+        x$Class <- obs[x$cluster, "Subcortex_Class_v4"]
+        x$Group <- obs[x$cluster, "Subcortex_Group_v4"]
+        x
+    }) %>% 
+    filter(Class == "Nonneuron") %>% 
+    ggplot(aes(Group, genes)) + 
+    geom_boxplot() + 
+    theme_md_classic() + 
+    labs(
+        y = "no. spatial panel genes in top 25%\nby expression within each cluster"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    )
+```
+
+
+## (!) Instead, call exp in top 3k genes
+
+```{r}
+top_3k_genes_by_cluster <- apply(
+    rna_by_cl_pctile, 2, function(x) names(sort(x, decreasing=TRUE))[1:3e3],
+    simplify=FALSE
+)
+```
+
+```{r}
+sapply(top_3k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    summary
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 80.0   147.0   155.0   152.2   161.0   189.0 
+sapply(top_3k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    sd
+# [1] 13.74966
+
+# > sapply(top_3k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% sort %>% head
+# cluster_852 cluster_849 cluster_856 cluster_847 cluster_851 
+#          80          81          81          82          83 
+# cluster_846 
+#          84
+```
+
+```{r}
+sapply(top_3k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    data.frame %>% 
+    setNames("genes") %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) {
+        x$Class <- obs[x$cluster, "Subcortex_Class_v4"]
+        x
+    }) %>% 
+    ggplot(aes(Class, genes)) + 
+    geom_boxplot() + 
+    theme_md_classic() + 
+    labs(
+        y = "for each cluster, number of spatial panel\ngenes in the top 3000 by expression"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    )
+```
+
+## (!) Change to top 1k
+
+
+```{r}
+top_1k_genes_by_cluster <- apply(
+    rna_by_cl_pctile, 2, function(x) names(sort(x, decreasing=TRUE))[1:1e3],
+    simplify=FALSE
+)
+```
+
+```{r}
+sapply(top_1k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    summary
+#  Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 53.00   91.00   96.00   94.46  100.00  113.00 
+sapply(top_1k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    sd
+# [1] 8.866553
+
+# > sapply(top_1k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% sort %>% head
+# cluster_816 cluster_847 cluster_817 cluster_852 cluster_857 cluster_848 
+#          53          54          55          55          55          56 
+```
+
+```{r}
+sapply(top_1k_genes_by_cluster, function(x) sum(x %in% panel_gns)) %>% 
+    data.frame %>% 
+    setNames("genes") %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    (function(x) {
+        x$Class <- obs[x$cluster, "Subcortex_Class_v4"]
+        x
+    }) %>% 
+    ggplot(aes(Class, genes)) + 
+    geom_boxplot() + 
+    theme_md_classic() + 
+    labs(
+        y = "for each cluster, number of spatial panel\ngenes in the top 1000 by expression"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    )
+```
+
+
+## heatmap neur classes/glia groups
+
+Maybe at the class level? (Or class + Non-neuron groups)
+
+```{r}
+grping <- ifelse(
+    obs$Subcortex_Class_v4 == "Nonneuron",
+    obs$Subcortex_Group_v4,
+    obs$Subcortex_Class_v4
+)
+```
+
+```{r}
+rna_grping_mean_cpm <- t(apply(
+    rna_by_cl_cpm, 1, function(x) tapply(x, grping, mean)
+))
+
+rna_grping_mean_cpm_z <- scale_rows(rna_grping_mean_cpm)
+```
+
+```{r, fig.height=8, fig.width=4}
+gp6 <- gpar(
+    fontsize   = 6,
+    fontfamily = "ArialMT",
+    fontface   = "plain"
+)
+
+ht <- Heatmap(
+    rna_grping_mean_cpm_z[panel_gns, ],
+    row_names_gp   = gp6,
+    column_names_gp = gp6,
+    row_title_gp  = gp6,
+    heatmap_legend_param = list(
+        title = "RNA (z)",
+        title_gp  = gp6,
+        labels_gp = gp6
+    ),
+)
+ht
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_panel_gn_exp_neurclass_gliagroup.pdf"),
+    width=3.5, height=15
+)
+draw(ht)
+invisible(dev.off())
+```
+
+```{r}
+## and won't be splitting out class "BG" here...
+# > obs$Subcortex_Group_v4[obs$Subcortex_Class_v4=="BG"] %>% unique %>% length 
+# [1] 39
+```
+
+I could recreate the ge_region_nt coding here...
+
+## (!) Recreate GE_RegionNT for this heatmap
+
+See notebook `combined_analysis` for eRegulon analysis.
+
+*Get "rg_cl": set of regionally localized neuronal clusters*
+
+For many (but not all) analyses, we will only use clusters that are spatially
+localized to an anatomical structure.
+
+```{r}
+rg_cl <- rownames(filter(
+    obs,
+    Subcortex_Class_v4 != "Nonneuron",
+    Cluster_Dominant_Region != "Multi"
+))
+```
+
+
+*Make NT_MSN to separate MSNs*
+
+Separate the MSNs from other GABA neurons.
+
+```{r}
+obs$NT_MSN <- obs$Cluster_NT
+obs$NT_MSN[grep("MSN", obs$Subcortex_Group_v4)] <- "MSN"
+```
+
+*Add RegionNT (w/ separated MSNs)*
+
+```{r}
+obs$RegionNT <- paste0(obs$Cluster_Dominant_Region, "_", obs$NT_MSN)
+```
+
+*Add GE derivation annotations*
+
+```{r}
+ge_groups <- list(
+    CGE = c(
+        "LAMP5-CXCL14 GABA",
+        "NDNF GABA",
+        "PAX6 GABA",
+        "PBX3 GABA",
+        "VIP GABA"
+    ),
+    MGE = c(
+        "CTX PVALB GABA",
+        "CTX PVALB Chandelier GABA",
+        "GPin-BF Cholinergic GABA",
+        "LAMP5-LHX6 GABA", 
+        "STR Cholinergic GABA",
+        "STR FS PTHLH-PVALB GABA",
+        "STR LYPD6-RSPO2 GABA",
+        "STR SST-ADARB2 GABA",
+        "STR SST-CHODL GABA",
+        "STR SST-RSPO2 GABA",
+        "STR TAC3-PLPP4 GABA",
+        "STRd Cholinergic GABA",
+        "STR-BF TAC3-PLPP4-LHX8 GABA"
+    ),
+    LGE = c(
+        "AMY-STR ITC-NUDAP MSN",
+        "GPe MEIS2-SOX6 GABA", # was "GP MEIS2-SOX6 GABA" in preprint
+        "OT D1 ICj",
+        "STRd D1 Matrix MSN",
+        "STRd D1 Striosome MSN",
+        "STR D1D2 Hybrid MSN", # was "STRd D1D2 Hybrid MSN" in preprint
+        "STRd D2 Matrix MSN",
+        "STRd D2 StrioMat Hybrid MSN",
+        "STRd D2 Striosome MSN",
+        "STRv D1 MSN",
+        "STRv D2 MSN"
+    )
+)
+stopifnot(all(unlist(ge_groups) %in% obs$Subcortex_Group_v4))
+```
+
+*Mutate obs*
+
+```{r}
+nm_map <- setNames(
+    rep(names(ge_groups), lengths(ge_groups)),
+    unname(unlist(ge_groups))
+)
+
+obs$GE <- ifelse(
+    obs$Subcortex_Group_v4 %in% names(nm_map),
+    nm_map[obs$Subcortex_Group_v4],
+    NA
+)
+```
+
+
+*Make GE_RegionNT*
+
+The column `GE_RegionNT` will be NA for everything not GE-derived. In hindsight
+I could have dealt with this more elegantly, but it's slightly convenient in
+many plots to just show the GE-derived cells and nothing else.
+
+```{r}
+obs <- mutate(
+    obs,
+    GE_RegionNT = ifelse(
+        is.na(GE),
+        NA,
+        paste0(GE, "_", RegionNT)
+    )
+)
+```
+
+*Also make complete GE_RegionNT_Complete*
+
+Unlike `GE_RegionNT`, this won't be NA for non-GE-derived, but will instead
+use `RegionNT` unless there's a value for `GE_RegionNT`.
+
+So when this variable is used, all RegionNT will be shown (with GE-derived
+cells divided out).
+
+```{r}
+obs$GE_RegionNT_Complete <- ifelse(
+    is.na(obs$GE_RegionNT),
+    as.character(obs$RegionNT),
+    as.character(obs$GE_RegionNT)
+)
+```
+
+```{r}
+obs$GE_RegionNT_Complete_Glia <- ifelse(
+    obs$Subcortex_Class_v4 == "Nonneuron",
+    obs$Subcortex_Group_v4,
+    obs$GE_RegionNT_Complete
+)
+```
+
+### Get avg expression for that
+
+```{r}
+rna_cpm_by_ge_rgnt_comp_glia <- t(apply(
+    rna_by_cl_cpm, 1, function(x) tapply(x, obs$GE_RegionNT_Complete_Glia, mean)
+))
+
+rna_cpm_by_ge_rgnt_comp_glia_z <- scale_rows(rna_cpm_by_ge_rgnt_comp_glia)
+```
+
+```{r}
+colnames(rna_cpm_by_ge_rgnt_comp_glia_z)
+rna_cpm_by_ge_rgnt_comp_glia_z %>% .[, !grepl("(Multi|^_$)", colnames(.))] %>% colnames
+```
+
+
+### heatmap panel genes
+
+```{r, fig.height=8, fig.width=4}
+gp6 <- gpar(
+    fontsize   = 6,
+    fontfamily = "ArialMT",
+    fontface   = "plain"
+)
+
+ht <- Heatmap(
+    rna_cpm_by_ge_rgnt_comp_glia_z %>% 
+        .[, !grepl("(Multi|^_$)", colnames(.))] %>% 
+        .[panel_gns, ] %>% 
+        `colnames<-`(., gsub("_", " ", colnames(.))),
+    row_names_gp   = gp6,
+    column_names_gp = gp6,
+    row_title_gp  = gp6,
+    heatmap_legend_param = list(
+        title = "RNA (z)",
+        title_gp  = gp6,
+        labels_gp = gp6
+    ),
+)
+ht
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_panel_gn_exp_ge_rgnt_comp_glia.pdf"),
+    width=6, height=20
+)
+draw(ht)
+invisible(dev.off())
+```
+
+actually, just grab that dendrogram as well:
+
+```{r}
+rna_cpm_by_ge_rgnt_comp_glia_z %>% 
+    .[, !grepl("(Multi|^_$)", colnames(.))] %>% 
+    .[panel_gns, ] %>% 
+    `colnames<-`(., gsub("_", " ", colnames(.))) %>% 
+    t %>% 
+    dist %>% 
+    hclust -> tmp
+```
+
+```{r, fig.width=13, fig.height=4}
+plot(tmp, hang=0.2, main = "Clustering Based on Spatial Panel Genes")
+```
+
+# Focus on panel genes that vary in non-neurons
+
+for a reviewer question, will take nonneuron Groups, select the most variable
+panel genes, and make a heatmap
+
+```{r}
+rna_cpm_by_group <- t(apply(
+    rna_by_cl_cpm, 1, function(x) tapply(x, obs$Subcortex_Group_v4, mean)
+))
+
+rna_cpm_by_group_z <- scale_rows(rna_cpm_by_group)
+```
+
+```{r}
+nn_groups <- unique(obs$Subcortex_Group_v4[obs$Subcortex_Class_v4=="Nonneuron"])
+
+# length(nn_groups)
+# [1] 113
+
+tibble::rownames_to_column(
+    data.frame(
+        # exp = apply(log1p(rna_cpm_by_group[, nn_groups]), 1, max), # max for a non-neuron group
+        max_z = apply(rna_cpm_by_group_z[, nn_groups], 1, max),
+        # var = apply(log1p(rna_cpm_by_group[, nn_groups]), 1, var)
+        var_z = apply(rna_cpm_by_group_z[, nn_groups], 1, var)
+    ),
+    "gene"
+) %>% 
+    filter(gene %in% panel_gns) %>% 
+    arrange(desc(max_z)) %>% 
+    head(150) %>%  # take only top half of panel by max exp
+    arrange(desc(var_z)) %>% 
+    head(75) %>% 
+    .$gene ->
+    top75_nn_var_genes
+```
+
+```{r}
+gp6 <- gpar(
+    fontsize   = 6,
+    fontfamily = "ArialMT",
+    fontface   = "plain"
+)
+
+ht <- Heatmap(
+    rna_cpm_by_group_z[top75_nn_var_genes, nn_groups],
+    row_names_gp   = gp6,
+    column_names_gp = gp6,
+    row_title_gp  = gp6,
+    heatmap_legend_param = list(
+        title = "RNA (z)",
+        title_gp  = gp6,
+        labels_gp = gp6
+    ),
+)
+ht
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_some_var_panel_genes_in_nonneurons.pdf"),
+    width=3, height=7
+)
+draw(ht)
+invisible(dev.off())
+```
+
+
+## Panel genes that vary in microglia clusters?
+
+
+```{r}
+microglia_cl <- rownames(obs)[obs$Subcortex_Group_v4=="Microglia"]
+
+# length(microglia_cl)
+# [1] 14
+
+tibble::rownames_to_column(
+    data.frame(
+        group_z = rna_cpm_by_group_z[, "Microglia"],
+        # var = apply(log1p(rna_cpm_by_group[, nn_groups]), 1, var)
+        # var = apply(rna_by_cl_cpm[, microglia_cl], 1, var),
+        var_z = apply(scale_rows(rna_by_cl_cpm[, microglia_cl]), 1, var)
+    ),
+    "gene"
+) %>% 
+    filter(gene %in% panel_gns) %>% 
+    arrange(desc(group_z)) %>% 
+    head(50) %>%  # take only genes in microglia
+    arrange(desc(var_z)) %>% 
+    head(30) %>% # drop the 20 with least variance
+    .$gene ->
+    top50_microglia_var_genes
+```
+
+```{r}
+gp6 <- gpar(
+    fontsize   = 6,
+    fontfamily = "ArialMT",
+    fontface   = "plain"
+)
+
+ht <- Heatmap(
+    scale_rows(rna_by_cl_cpm[top50_microglia_var_genes, microglia_cl]),
+    row_names_gp   = gp6,
+    column_names_gp = gp6,
+    row_title_gp  = gp6,
+    heatmap_legend_param = list(
+        title = "RNA (z)",
+        title_gp  = gp6,
+        labels_gp = gp6
+    ),
+)
+ht
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_some_var_panel_genes_in_microglia.pdf"),
+    width=3, height=5
+)
+draw(ht)
+invisible(dev.off())
+```
+
+
+# Spatial vs. multiome metacell correlations
+
+Pearons's R of log1p(CPM) cluster-level pseudobulk (assigned spatial clusters
+vs. multiome clusters).
+
+Rows for spatial metacell, and columns for multiome metacells.
+
+```{r}
+pb_cor <- cor(log1p(matched_pb_mats$spatial), log1p(matched_pb_mats$multiome))
+stopifnot(all(rownames(pb_cor) == colnames(pb_cor)))
+```
+
+## couple quick checks
+
+```{r}
+# (also should be ~impossible but will check for any ties)
+# > pb_cor %>% apply(1, function(x) length(which(x == max(x))) > 1) %>% unlist %>% any 
+# [1] FALSE
+
+# most common hits? [are any multiome clusters soaking up correlations?]
+pb_cor %>% apply(1, which.max) %>% 
+    colnames(pb_cor)[.] %>% 
+    table %>% 
+    sort(TRUE) %>% 
+    head(10)
+# cluster_217   cluster_65  cluster_750  cluster_848  cluster_187  cluster_681 cluster_1742 
+#          14           12           11           10            8            8            7 
+# cluster_207 cluster_1129 cluster_1424 
+#           7            6            6 
+
+## a little bit but nothing totally wild; but what are those clusters?
+pb_cor %>% apply(1, which.max) %>% 
+    colnames(pb_cor)[.] %>% 
+    table %>% 
+    sort(TRUE) %>% 
+    head(10) %>% 
+    names %>% 
+    (function(x) obs[x, "Subcortex_Group_v4"])
+ # [1] "VP-MG Glut"              "STRd D1 Matrix MSN"      "LGmc-LGpc Glut"          "Microglia"              
+ # [5] "STR FS PTHLH-PVALB GABA" "Astro-NT NN"             "DG Glut"                 "VLN Glut"               
+ # [9] "L6 CT CTX-PArCx Glut"    "L2-3 Pir-ERC Glut" 
+
+
+### how many match their namesake?
+pb_cor %>% apply(1, which.max) %>% 
+    (function(x) data.frame(spatial = names(x), multiome = colnames(pb_cor)[unname(x)])) %>% 
+    mutate(match = spatial==multiome) %>% 
+    .$match %>% 
+    sum
+# [1] 1157 # out of 1620
+```
+
+so 72% of the time the best match by correlation is the namesake
+
+```{r}
+pb_cor %>% apply(1, which.max) %>% 
+    (function(x) data.frame(spatial = names(x), multiome = colnames(pb_cor)[unname(x)])) %>% 
+    mutate(match = spatial==multiome) %>% 
+    filter(!match) %>% 
+    (function(x) {
+        cbind(x, obs[x$spatial, ][, c(
+            "Subcortex_Class_v4", "Subcortex_Group_v4", "Cluster_v4_size", "Cluster_Dominant_Region"
+        )])
+    }) %>% 
+    .$Subcortex_Class_v4 %>% 
+    table %>% 
+    prop.table %>% 
+    round(3) %>% 
+    sort(TRUE)
+
+  #           BG       TEL Glut       THM Glut      Nonneuron     MB-HB Glut     MB-HB GABA 
+  #        0.229          0.225          0.132          0.110          0.108          0.073 
+  # CNU-HTH GABA       HTH Glut       THM GABA       HTH GABA   CNU-HTH Glut       SEP GABA 
+  #        0.030          0.030          0.024          0.017          0.011          0.006 
+  # CTX-CGE GABA MB-HTH-HB Sero 
+  #        0.002          0.002 
+```
+
+```{r}
+obs$Subcortex_Class_v4 %>% table %>% prop.table %>% round(3) %>% sort(TRUE)
+
+  #           BG       TEL Glut       THM Glut     MB-HB Glut      Nonneuron     MB-HB GABA 
+  #        0.245          0.216          0.108          0.070          0.069          0.068 
+  # CNU-HTH GABA       HTH Glut       HTH GABA   CNU-HTH Glut       SEP GABA       THM GABA 
+  #        0.053          0.046          0.035          0.029          0.023          0.023 
+  # CTX-CGE GABA   CTX-MGE GABA MB-HTH-HB Sero       HTH Hist 
+  #        0.009          0.003          0.002          0.001 
+```
+
+on first glance it seems to mostly match the background distribution, so maybe
+not noticeably worse performance in any single class... but should check in 
+better detail. In general I should break down this analysis in terms of the 
+group.
+
+## get dataframe of top couple hits and namesake
+
+```{r}
+pb_cor %>% 
+    apply(1, sort, TRUE, simplify = FALSE) %>% 
+    Map(function(x, qry) {
+        data.frame(
+            query = qry,
+            top_hit = names(x)[1],
+            top_cor = unname(x)[1],
+            second_hit = names(x)[2],
+            second_cor = unname(x)[2],
+            namesake_rank = which(names(x)==qry),
+            namesake_cor  = x[qry]
+        )
+    }, ., names(.)) %>% 
+    bind_rows %>% 
+    `rownames<-`(NULL) %>% 
+    (function(x) {
+        x$query_group <- obs[x$query, "Subcortex_Group_v4"]
+        x$query_class <- obs[x$query, "Subcortex_Class_v4"]
+        x$query_region <- obs[x$query, "Cluster_Dominant_Region"]
+        x$top_hit_group <- obs[x$top_hit, "Subcortex_Group_v4"]
+        x$top_hit_class <- obs[x$top_hit, "Subcortex_Class_v4"]
+        x$top_hit_region <- obs[x$top_hit, "Cluster_Dominant_Region"]
+        x
+    }) -> 
+    df_metacell_sim
+```
+
+## breakdown cor rank of namesake 
+
+i do this again below
+
+```{r}
+df_metacell_sim %>% 
+    (function(x) {
+        x$query_group <- obs[x$query, "Subcortex_Group_v4"]
+        x$top_hit_group <- obs[x$top_hit, "Subcortex_Group_v4"]
+        x
+    }) %>% 
+    filter(namesake_rank>1) %>% # 463 rows
+    mutate(group_match = top_hit_group == query_group) %>% 
+    .$group_match %>% 
+    sum
+# 362
+```
+
+So 1157/1620 (71.5%) match their assigned clusters
+Of remaining 463 clusters, 362 (78% are within the same group).
+
+[so in sum, 1157+362=1519, 1519/1620=94% align best with their assigned group].
+
+What about the other 6% (101 clusters)? what's going on?
+
+```{r}
+df_metacell_sim %>% 
+    filter(namesake_rank>1) %>% # 463 rows
+    mutate(group_match = top_hit_group == query_group) %>% 
+    filter(!group_match)
+```
+
+
+## histogram rank cor of namesake
+
+```{r}
+ggplot(df_metacell_sim, aes(namesake_rank)) + 
+    geom_histogram(binwidth = 1, color="black", linewidth=0.25, fill="gray75") + 
+    scale_x_continuous(limits = c(0, 12), expand=c(0,0)) + 
+    coord_cartesian(ylim = c(0, 1200), expand=FALSE, clip="off") + 
+    labs(
+        title = "Histogram: Spatial Assigned Cluster Metacell\nMatching its Multiome Namesake Cluster",
+        y = "Number of Clusters\n(out of 1620 assigned to spatial)",
+        x = "Rank Correlation of Namesake Cluster in Multiome RNA"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "histogram_rank_cor_of_namesake_cluster.pdf"),
+    width=70, height=45, units = "mm"
+)
+```
+
+
+```{r}
+# > sum(df_metacell_sim$namesake_rank <= 2)
+# [1] 1409
+```
+
+1409/1620=87% of clusters have their namesake ranked as number 1 or number 2.
+
+```{r}
+# > sum(df_metacell_sim$namesake_rank <= 3)
+# [1] 1514
+```
+
+1514/1620=93% of clusters have their namesake multiome cluster in top 3
+
+### redo as a cumulative proportion?
+
+no i'm having so much trouble labelling this thing so it's not worth it
+
+```{r}
+df_metacell_sim$namesake_rank %>% 
+    hist(plot=FALSE, breaks=0:1620) %>% 
+    .$counts %>% 
+    cumsum %>% 
+    "/"(., max(.)) %>% 
+    (function(x) data.frame(rank=seq_along(x), prop=x)) %>% 
+    ggplot(aes(rank, prop)) + 
+    geom_line() + 
+    scale_y_continuous(limits=c(0.5, 1), expand=c(0,0), labels = scales::percent) +
+    scale_x_continuous(limits = c(1,7), expand=c(0,0)) + 
+    labs(
+        title = "Histogram: Spatial Assigned Cluster Metacell\nMatching its Multiome Namesake Cluster",
+        y = "Cumulative Fraction of Assigned Clusters",
+        x = "Rank of Namesake Cluster by Metacell Correlation"
+    ) + 
+    theme_md_classic()
+```
+
+
+## (!) quick run-down class, group, cluster level success
+
+looking at the class level, fraction of assigned clusters.
+
+```{r}
+df_metacell_sim %>%
+    split(., .$query_class) %>%
+    sapply(function(x) sum(x$query_class == x$top_hit_class) / nrow(x)) %>%
+    (function(x) data.frame(assigned_class = names(x), frac_clusts_match_class = unname(x))) %>%
+    arrange(frac_clusts_match_class) %>%
+    print.data.frame
+
+#    assigned_class frac_clusts_match_class
+# 1      MB-HB Glut               0.9375000
+# 2        HTH Glut               0.9600000
+# 3      MB-HB GABA               0.9636364
+# 4              BG               0.9874372
+# 5        THM Glut               0.9887640
+# 6        TEL Glut               0.9971429
+# 7    CNU-HTH GABA               1.0000000
+# 8    CNU-HTH Glut               1.0000000
+# 9    CTX-CGE GABA               1.0000000
+# 10   CTX-MGE GABA               1.0000000
+# 11       HTH GABA               1.0000000
+# 12       HTH Hist               1.0000000
+# 13 MB-HTH-HB Sero               1.0000000
+# 14      Nonneuron               1.0000000
+# 15       SEP GABA               1.0000000
+# 16       THM GABA               1.0000000
+```
+
+but just generally what is the fraction
+
+```{r}
+# df_metacell_sim %>%
+#     mutate(class_match = query_class == top_hit_class) %>%
+#     (function(x) round(sum(x$class_match) / nrow(x), 2))
+# [1] 0.99
+```
+
+~99% of clusters match their class
+
+```{r}
+# df_metacell_sim %>%
+#     mutate(group_match = query_group == top_hit_group) %>% 
+#     (function(x) round(sum(x$group_match) / nrow(x), 2))
+# [1] 0.94
+```
+
+~94% of assigned clusters match their group
+
+```{r}
+# df_metacell_sim %>%
+#     mutate(group_match = query_group == top_hit_group) %>%
+#     (function(x) round(sum(x$namesake_rank==1) / nrow(x), 2))
+```
+
+~71% of clusters match their cluster
+
+### Plot that
+
+```{r}
+df_metacell_sim %>%
+    mutate(
+        class_match = query_class == top_hit_class,
+        group_match = query_group == top_hit_group
+    ) %>% 
+    (function(x) {
+        data.frame(
+            match = c("Class", "Group", "Cluster") %>% factor(., .),
+            prop = c(
+                round(sum(x$class_match) / nrow(x), 2),
+                round(sum(x$group_match) / nrow(x), 2),
+                round(sum(x$namesake_rank==1) / nrow(x), 2)
+            )
+        )
+    }) %>% 
+    ggplot(aes(match, prop)) + 
+    geom_col(color="black", linewidth=0.25, fill="gray85") + 
+    scale_y_continuous(limits = c(0,1), expand=c(0,0), labels=scales::percent) + 
+    labs(
+        x = "Correlation Mapping of Spatial Metacell\nMatches Its Assignment",
+        y = "Fraction of Assigned Clusters",
+        title = "Spatial vs. Multiome Metacell Similarity"
+    ) + 
+    theme_md_classic()
+```
+
+
+## cluster-mapping namesake cor by class
+
+```{r}
+df_metacell_sim %>% 
+    ggplot(aes(query_class, namesake_cor, color = query_class)) + 
+    geom_boxplot() + 
+    scale_color_manual(values = palettes$Class) +
+    labs(
+        x = "Assigned Class",
+        y = "Assigned Cluster Correlation with Multiome Cluster"
+    ) + 
+    scale_y_continuous(limits = c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+        legend.position = "none"
+    )
+```
+
+I mean, on the whole, it looks bad. And I know the marginals won't look very 
+good.
+
+```{r}
+df_metacell_sim %>% 
+    filter(namesake_rank==1) %>%  # take only the ones where correlation shows success [n=1157]
+    ggplot(aes(query_class, top_cor - second_cor, color = query_class)) + 
+    geom_boxplot() + 
+    scale_color_manual(values = palettes$Class) +
+    labs(
+        x = "Assigned Class",
+        y = "Top Hit Cor - Second Hit Cor",
+        title = "Margin of Victory when Cluster Maps to Namesake"
+    ) + 
+    # scale_y_continuous(limits = c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+        legend.position = "none"
+    )
+```
+
+Doesn't look too bad...
+
+## analysis by group
+
+any groups looking totally worse on the whole? (perfect groups?)
+
+```{r}
+df_metacell_sim %>%
+    split(., .$query_group) %>%
+    sapply(function(x) sum(x$namesake_rank == 1) / nrow(x)) %>%
+    (function(x) data.frame(assigned_group = names(x), frac_clusts_match = unname(x)))
+```
+
+looking within groups at how well their clusters match:
+
+```{r}
+### number of groups with 100% cluster matching
+# df_metacell_sim %>% 
+#     split(., .$query_group) %>% 
+#     sapply(function(x) sum(x$namesake_rank == 1) / nrow(x)) %>% 
+#     "=="(1) %>% 
+#     sum
+# [1] 66 groups have 100% of the clusters matching
+
+
+### group median cluster-matching rate
+# df_metacell_sim %>% 
+#     split(., .$query_group) %>%
+#     sapply(function(x) sum(x$namesake_rank == 1) / nrow(x)) %>% 
+#     median
+# [1] 0.8129371
+
+## the by-group median is 81% of clusters match
+
+
+#### worst 10 groups for cluster-level matching
+# df_metacell_sim %>% 
+#     split(., .$query_group) %>%
+#     sapply(function(x) sum(x$namesake_rank == 1) / nrow(x)) %>% 
+#     sort %>% 
+#     head(10)
+#
+#       HB VSX2-NKX6-1 Glut            LGmc-LGpc Glut     STRd D1 Striosome MSN 
+#                 0.0000000                 0.1818182                 0.2500000 
+#                   MG Glut PAG-IC-SC TFAP2D-MAF Glut        STRd D1 Matrix MSN 
+#                 0.2857143                 0.3076923                 0.3157895 
+#                       BAM                 GPi Shell    L5-6 NP CTX-PArCx Glut 
+#                 0.3333333                 0.3333333                 0.3333333 
+#                 LGko Glut 
+#                 0.3333333 
+
+# just checking on daisy's thing
+df_metacell_sim %>% 
+    split(., .$query_group) %>%
+    sapply(function(x) sum(x$namesake_rank == 1) / nrow(x)) %>% 
+    .[grepl("(CA|ProS)", names(.))]
+# 
+#       CA1-ProS Glut     CA2-CA3-IG Glut            CA3 Glut MPA HMX2-CALB1 Glut   SN-VTR CALB1 Dopa 
+#           0.6666667           1.0000000           0.7878788           1.0000000           0.9166667 
+#       SUB-ProS Glut 
+#           0.5833333 
+```
+
+### aggregate matching by group
+
+what about group matching (by group)?
+
+```{r}
+df_metacell_sim %>% 
+    split(., .$query_group) %>%
+    lapply(function(x) {
+        # get top mismatched group
+        top_miss <- table(x$top_hit_group) %>% 
+            sort(TRUE) %>% 
+            .[!names(.)==x$query_group]
+        
+        if (length(top_miss)==0) {
+            top_miss <- c("none" = 0)
+        } else {
+            top_miss <- top_miss[1]
+        }
+        
+        data.frame(
+            assigned_group = unique(x$query_group),
+            n_clusts = nrow(x),
+            frac_cl_mtch_grp = round(
+                sum(x$top_hit_group == x$query_group) / nrow(x),
+                3
+            ),
+            top_wrng_grp = names(top_miss),
+            top_wrng_grp_frac = round(unname(top_miss)/nrow(x), 3)
+        )
+    }) %>% 
+    suppressWarnings %>% 
+    bind_rows %>% 
+    mutate(top_wrng_grp = sub("none", "", top_wrng_grp)) ->
+    df_metacell_sim_by_group
+```
+
+so this is looking at groups whose assigned cells can have multiple different
+groups be more similar:
+
+```{r}
+df_metacell_sim_by_group %>% 
+    filter(frac_cl_mtch_grp + top_wrng_grp_frac < 1) %>% 
+    arrange(frac_cl_mtch_grp + top_wrng_grp_frac) %>% 
+    print.data.frame
+```
+
+```
+                 assigned_group n_clusts frac_cl_mtch_grp                  top_wrng_grp top_wrng_grp_frac
+1     PAG-IC-SC TFAP2D-MAF Glut       13            0.692                MCN FOXB1 Glut             0.077
+2               MB-HB PAX5 GABA       18            0.722        SC-PAG PAX7-CDH23 GABA             0.111
+3                     LGko Glut        6            0.667                LGko-IPul Glut             0.167
+4   L5-6 IT PArCx-ArCx-CTX Glut        7            0.714              L2-3 IT CTX Glut             0.143
+5                    VP-MG Glut        8            0.625                      VLN Glut             0.250
+6      MD-IMD-VL-MG-PO-PLi Glut       17            0.706                      VLN Glut             0.176
+7           SCdp-PAG FOXB1 Glut       11            0.727                 SC PDE5A Glut             0.182
+8                      ILN Glut       14            0.857                      VLN Glut             0.071
+9                    BM-Co Glut       15            0.867           Co-ACTA-Pir-La Glut             0.067
+10                     PAG Glut       31            0.871           SCdp-PAG FOXB1 Glut             0.065
+11       SC-PAG PAX7-CDH23 GABA       19            0.842                 SC DMBX1 GABA             0.105
+12                  STRv D2 MSN       19            0.895            STRd D2 Matrix MSN             0.053
+13 SN-VTR-HTH GATA3-TCF7L2 GABA       23            0.913          HTHpo SIX3-OTX2 GABA             0.043
+14                     VLN Glut       24            0.833                    VP-MG Glut             0.125
+15                 MGC-BIC Glut       24            0.917 HTHtu-MPA-MeR FEZF1-ESR1 Glut             0.042
+16                     CA3 Glut       33            0.939                   Astro-TE NN             0.030
+17                 VTR-HTH Glut       38            0.947           MB-HB OTP-PAX3 GABA             0.026
+```
+
+### plot group n_clusts vs. frac_clusts match namesake
+
+i have started (above) the matching rate by group, which I could plot by class
+or someting.
+
+
+```{r}
+df_metacell_sim_by_group %>% 
+    left_join(
+        unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]) %>% setNames(c("assigned_group", "assigned_class")),
+        by = "assigned_group"
+    ) %>% 
+    ggplot(aes(n_clusts, frac_cl_mtch_grp, color = assigned_class)) + 
+    geom_point() + 
+    ggrepel::geom_text_repel(
+        aes(label = assigned_group),
+        size=2.5,
+        family="ArialMT"
+    ) + 
+    scale_color_manual(values = palettes$Class) + 
+    labs(
+        x = "Number of Assigned Clusters in Group",
+        y = "Fraction of Assigned Group's Clusters where\nspatial metacell matches its multiome namesake",
+        color = "Assigned Class",
+        title = "Correlation Mapping of Spatial Cluster Metacells to Multiome RNA"
+    ) + 
+    theme_md_classic()
+```
+
+but another thing is the actual correlation values, like which match their
+cross-modality partners best...
+
+## How to extract cluster-level confidence scoring?
+
+For each cluster, how to rate cluster-level similarity, group-level, etc.
+
+How to gauge confidence.
+
+And this also to be done in principle with the MMC self-mapping.
+
+

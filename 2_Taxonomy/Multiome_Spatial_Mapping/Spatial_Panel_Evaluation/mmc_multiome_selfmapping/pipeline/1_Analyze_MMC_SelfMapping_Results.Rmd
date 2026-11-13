@@ -1,0 +1,3348 @@
+---
+title: "1_Analyze_MMC_SelfMapping_Results"
+output: html_document
+date: "2026-02-23"
+---
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    # library(circlize)
+    # library(RColorBrewer)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+    library(ggrepel)
+    # library(viridisLite)
+    library(grid)
+    # library(igraph)
+    # library(ggraph)
+    # library(scales)
+    library(tibble)
+    # library(tidyr)
+    # library(purrr)
+    # library(stringr)
+    # library(GenomicRanges)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),  # was size 8 in other notebooks?
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        complete = TRUE
+    )
+}
+
+theme_md_bw <- function() {
+    theme_bw(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),
+        strip.text.y = element_text(angle = 0),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, color = "black"),
+        complete = TRUE
+    )
+}
+```
+
+## Utilities
+
+```{r}
+# just takes 2 vectors; positive is the class for which to calculate F1 score
+f1_score <- function(pred, truth, positive = 1) {
+    # Basic checks
+    if (length(pred) != length(truth)) {
+        stop("pred and truth must have the same length.")
+    }
+    
+    # Coerce to same type
+    pred  <- as.vector(pred)
+    truth <- as.vector(truth)
+    
+    # Remove NA pairs
+    keep  <- !is.na(pred) & !is.na(truth)
+    pred  <- pred[keep]
+    truth <- truth[keep]
+    
+    # Confusion components
+    tp <- sum(pred == positive & truth == positive)
+    fp <- sum(pred == positive & truth != positive)
+    fn <- sum(pred != positive & truth == positive)
+    
+    # Handle edge cases
+    if (tp == 0) 
+        return(0)
+    
+    precision <- tp / (tp + fp)
+    recall    <- tp / (tp + fn)
+    
+    if ((precision + recall) == 0) 
+        return(0)
+    
+    2 * precision * recall / (precision + recall)
+}
+
+
+f1_per_class <- function(pred, truth) {
+    if (length(pred) != length(truth)) 
+        stop("pred and truth must have same length.")
+    
+    keep  <- !is.na(pred) & !is.na(truth)
+    pred  <- pred[keep]
+    truth <- truth[keep]
+    
+    # check all pred in truth
+    unknown <- setdiff(unique(pred), unique(truth))
+    if (length(unknown) > 0)
+        stop("pred contains labels not present in truth: ", paste(unknown, collapse = ", "))
+    
+    # Ensure pred has same set of levels as truth so missing predicted classes get 0 columns
+    truth_fac <- factor(truth)
+    pred_fac  <- factor(pred, levels = levels(truth_fac))
+    
+    cm <- table(truth_fac, pred_fac)  # rows=true, cols=pred
+    
+    tp <- diag(cm)
+    pred_pos <- colSums(cm)
+    true_pos <- rowSums(cm)
+    
+    fp <- pred_pos - tp
+    fn <- true_pos - tp
+    
+    precision <- ifelse(tp + fp > 0, tp / (tp + fp), 0)
+    recall    <- ifelse(tp + fn > 0, tp / (tp + fn), 0)
+    
+    f1 <- ifelse(precision + recall > 0, 2 * precision * recall / (precision + recall), 0)
+    names(f1) <- levels(truth_fac)
+    return(f1)
+}
+```
+
+
+## Paths/imports
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+outdir <- file.path(pdir, "mmc_multiome_selfmapping")
+
+pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"
+pdir_selfmmc <- "/Volumes/krienen/aibs_fileshare/hmba-marmoset-wg-802451596237-us-west-2/Subcortex/revisions/self_mapping_MMC_output"
+
+pdir_plots <- file.path(outdir, "plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+
+# for exports
+pdir_data <- file.path(outdir, "data")
+if (!dir.exists(pdir_data))
+    dir.create(pdir_data)
+```
+
+```{r}
+# obs, color palettes
+# -> note the "obs" is the metacell obs, but in this notebook we are dealing with single cell mapping,
+#    so we will need the full cell metadata as well, which here is cell metadata and not "obs"
+# path_obs <- file.path(pdir_meta, "preprint_freeze/subcortex_anno_table_preprint.csv")
+# path_palettes <- file.path(pdir_meta, "preprint_freeze/color_palette.csv")
+path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
+path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
+
+path_donor_counts <- file.path(pdir_meta, "MSA_cluster_donor_table.csv")
+
+# cell metadata
+path_cmeta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/revision/rna_cell_metadata_with_preprint_umap_20260219.csv"
+
+# some taxonomy annotations w/ NSForest markers
+# -> the collapsed sets are imported separately, but these have the taxonomic
+#    reference for the markers themselves
+path_group_nsfor <- file.path(pdir_meta, "preprint_freeze/taxonomy_group_class_preprint_nsforest.csv")
+path_clust_nsfor <- file.path(pdir_meta, "preprint_freeze/supp_table/S2_Cluster_Info.csv")
+
+# multiome rna pseudobulk/metacell matrix
+# path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_genes_matrix.csv"
+
+# spatial pseudobulk/metacell matrix
+# path_spatial_by_cl_raw <- file.path(outdir, 'data/spatial_pseudobulk_Cluster_v4.csv')
+```
+
+```{r}
+# genes in spatial panel
+path_spatial_panel <- '/Volumes/krienen/lab_members/daisy/hmba/xenium_genes_2024.csv'
+
+# genes in some other sets
+pdir_sets <- "/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets"
+path_clust_nsf <- file.path(pdir_sets, "Cluster_NSForest_Markers_Gene_List.txt")
+path_group_nsf <- file.path(pdir_sets, "Group_NSForest_Markers_Gene_List.txt")
+path_hvgs      <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/preprint_freeze/RNA_HVG_4K_preprint_freeze.csv"
+path_tfs       <- file.path(pdir_sets, "marm_TFs/Callithrix_jacchus_TF.txt")
+path_mm_mfish  <- file.path(pdir_sets, "abc_wmb_tax_genes/abc_merfish_genes.txt")
+path_mm_abcgn  <- file.path(pdir_sets, "abc_wmb_tax_genes/abc_tax_genes.txt")
+```
+
+
+## Imports
+
+```{r}
+nms <- c(
+    "marmoset_AnimalTFDB_TF",
+    "marmoset_MSCA_Cluster_NSForest",
+    "marmoset_MSCA_Group_NSForest",
+    "marmoset_MSCA_rnaseq_HVG",
+    "marmoset_MSCA_Xenium",
+    "mouse_ABC_Atlas_MERFISH",
+    "mouse_ABC_Atlas_taxonomy"
+)
+
+selfmmc <- sapply(nms, function(x) {
+    pth <- file.path(pdir_selfmmc, x, "rna_raw_v4_freeze_noJunkClusters_mmc_results-cluster_v4.csv")
+    read.csv(pth, comment.char="#")
+}, simplify = FALSE, USE.NAMES = TRUE)
+```
+
+full NSForest tables
+
+```{r}
+group_nsfor <- read.csv(path_group_nsfor)
+clust_nsfor <- read.csv(path_clust_nsfor)
+```
+
+parallel gene sets
+
+```{r}
+gene_sets <- sapply(selfmmc, function(x) NULL, simplify=FALSE)
+gene_sets$marmoset_AnimalTFDB_TF <- read.delim(path_tfs)$Symbol
+gene_sets$marmoset_MSCA_Cluster_NSForest <- readLines(path_clust_nsf)
+gene_sets$marmoset_MSCA_Group_NSForest <- readLines(path_group_nsf)
+gene_sets$marmoset_MSCA_rnaseq_HVG <- read.csv(path_hvgs)[[1]]
+gene_sets$marmoset_MSCA_Xenium <- read.csv(path_spatial_panel)[[1]]
+gene_sets$mouse_ABC_Atlas_MERFISH <- readLines(path_mm_mfish)
+gene_sets$mouse_ABC_Atlas_taxonomy <- readLines(path_mm_abcgn)
+
+gene_sets <- lapply(gene_sets, . %>% unique %>% sort %>% setdiff(""))
+gene_sets[c("mouse_ABC_Atlas_MERFISH", "mouse_ABC_Atlas_taxonomy")] <- lapply(
+    gene_sets[c("mouse_ABC_Atlas_MERFISH", "mouse_ABC_Atlas_taxonomy")],
+    toupper
+)
+
+### still need to actually subset these genes to those in the transcriptome;
+### and have also lazily just taken the gene symbols here for the mouse genes
+
+# > lengths(gene_sets) %>% cbind
+# marmoset_AnimalTFDB_TF         1329
+# marmoset_MSCA_Cluster_NSForest 2916
+# marmoset_MSCA_Group_NSForest    398
+# marmoset_MSCA_rnaseq_HVG       4000
+# marmoset_MSCA_Xenium            300
+# mouse_ABC_Atlas_MERFISH         500
+# mouse_ABC_Atlas_taxonomy        194
+```
+
+```{r}
+# multiome rna
+# rna_by_cl_raw <- data.table::fread(path_rna_by_cl_raw, header=TRUE)
+# rnames        <- rna_by_cl_raw[[1]]
+# rna_by_cl_raw <- as.matrix(rna_by_cl_raw[,-1])
+# rownames(rna_by_cl_raw) <- rnames
+```
+
+```{r}
+# spatial rna
+# spatial_by_cl_raw <- read.csv(path_spatial_by_cl_raw, row.names="X")
+# spatial_by_cl_raw <- as.matrix(spatial_by_cl_raw)
+
+# apparently 8 spatial metacells with 0 counts, not sure how they got in
+# spatial_by_cl_raw <- spatial_by_cl_raw[, !colSums(spatial_by_cl_raw) == 0]
+```
+
+```{r}
+# obs will align with the full multiome pseudobulk matrix but will later
+# subset to align spatial & multiome clusters, but won't align obs to that
+
+obs <- read.csv(path_obs, row.names = "marm_cluster_id")
+obs$inconclusive_mapping <- as.logical(toupper(obs$inconclusive_mapping))
+# > nrow(obs)
+# [1] 1737
+
+#### lacks Junk; and these are clusters excluded for the analysis set:
+# > table(obs$inconclusive_mapping)
+# False  True 
+#  1642    95 
+
+### old (full preprint set, including Junk clusters)
+# > nrow(obs)
+# [1] 1811
+```
+
+```{r}
+donor_counts <- read.csv(path_donor_counts)[, -1]
+```
+
+```{r}
+cmeta <- read.csv(path_cmeta)
+
+# actually contains the full obs table, rendering the other object a slight convenience;
+# to match MMC output, will change CBC colname (here, "index") to "cell_id"
+names(cmeta)[names(cmeta)=="index"] <- "cell_id"
+
+cmeta$inconclusive_mapping <- as.logical(toupper(cmeta$inconclusive_mapping))
+```
+
+```{r}
+# color palettes
+pal_df <- read.csv(path_palettes)
+pal_df$Name[pal_df$Name == "NA"] <- NA_character_
+
+palettes <- split(pal_df, pal_df$Type) %>% 
+    lapply(function(x) setNames(x$color_hex, x$Name))
+#         BG   CNU-HTH GABA   CNU-HTH Glut       HTH GABA       HTH Glut       HTH Hist     MB-HB GABA 
+#  "#CBC3E3"      "#E69F00"      "#56B4E9"      "#F0E442"      "#0072B2"      "#D55E00"      "#CC79A7" 
+# MB-HB Glut MB-HTH-HB Sero      Nonneuron   Pineal Gland       SEP GABA       TEL Glut       THM GABA 
+#  "#44AA99"      "#AA4499"      "#999999"      "#B3C65C"      "#882255"      "#88CCEE"      "#DDCC77" 
+#   THM Glut           <NA> 
+#  "#332288"      "#7f7f7f"
+```
+
+
+## (Don't subset cluster obs to the analysis set)
+
+I don't know what to do with the `inconclusive_mapping` set. Should I totally
+ignore here? But we might see that self-mapping works well, just not with the
+spatial panel genes?
+
+
+```{r}
+# > table(obs$inconclusive_mapping)
+# 
+# FALSE  TRUE 
+#  1642    95
+
+obs %>%
+    filter(inconclusive_mapping) %>%
+    select(Subcortex_Class_v4, Subcortex_Group_v4, Cluster_Dominant_Region) %>%
+    `rownames<-`(NULL) %>%
+    table %>%
+    as.data.frame(responseName="clusters") %>%
+    filter(clusters>0) %>%
+    arrange(Subcortex_Class_v4, Subcortex_Group_v4, Cluster_Dominant_Region) %>%
+    print.data.frame(row.names=F)
+
+# Subcortex_Class_v4          Subcortex_Group_v4 Cluster_Dominant_Region clusters
+#       CNU-HTH GABA                BST-MPA GABA                      BF        6
+#       CNU-HTH GABA                BST-MPA GABA                     EXA        6
+#       CNU-HTH GABA                BST-MPA GABA                     HTH        6
+#       CNU-HTH GABA             HTH-ZI-MeR GABA                     HTH       15
+#       CNU-HTH GABA             HTH-ZI-MeR GABA                     THM        8
+#       CNU-HTH GABA        HTHpo LHX6-TAC1 GABA                     HTH        2
+#       CNU-HTH Glut              VTH-MB-HB Glut                      MB        3
+#       CNU-HTH Glut              VTH-MB-HB Glut                     THM        4
+#       CNU-HTH Glut                     ZI Glut                      MB        3
+#       CNU-HTH Glut                     ZI Glut                     THM        1
+#           HTH GABA HTHtu-HTHpo NTS-SEMA3C GABA                     HTH       11
+#           HTH GABA PeV-PHN HMX2-LEF1 Glut-GABA                     HTH       11
+#         MB-HB Glut                   PnRa Glut                      HB        1
+#         MB-HB Glut               SPAR-MEN Glut                      MB        1
+#       Pineal Gland                         Pin                     Pin        1
+#           SEP GABA   BF-HTH-MB SALL3-PAX6 GABA                      BF        8
+#           TEL Glut                    AMY Glut                     AMY        3
+#           TEL Glut                      Ex IMN                   Multi        1
+#           THM Glut                    THM Glut                     THM        4
+```
+
+
+```{r}
+### not doing
+# obs <- subset(obs, !inconclusive_mapping)
+# > nrow(obs)
+# [1] 1642
+```
+
+# (Quick check MMC results matching taxonomy)
+
+```{r}
+stopifnot(all(sapply(selfmmc, function(x) identical(x$cell_id, cmeta$cell_id))))
+```
+
+```{r}
+selfmmc$marmoset_AnimalTFDB_TF$Cluster_v4_label %>% head
+```
+
+
+```{r}
+sapply(selfmmc, function(x) {
+    round(
+        sum(x$Cluster_v4_label == cmeta$Cluster_v4) / nrow(x),
+        3
+    )
+}) %>% sort(TRUE) %>% cbind
+
+# marmoset_MSCA_rnaseq_HVG       0.730
+# marmoset_MSCA_Cluster_NSForest 0.725
+# marmoset_AnimalTFDB_TF         0.639
+# marmoset_MSCA_Xenium           0.601
+# mouse_ABC_Atlas_MERFISH        0.597
+# marmoset_MSCA_Group_NSForest   0.563
+# mouse_ABC_Atlas_taxonomy       0.365
+```
+
+## (compare to analysis and non-analysis sets)
+
+if we stick to the analysis sets
+
+```{r}
+sapply(selfmmc, function(x) {
+    cmt <- filter(cmeta, !inconclusive_mapping)
+    x <- filter(x, cell_id %in% cmt$cell_id)
+    stopifnot(identical(x$cell_id, cmt$cell_id))
+    round(
+        sum(x$Cluster_v4_label == cmt$Cluster_v4) / nrow(x),
+        3
+    )
+}) %>% sort(TRUE) %>% cbind
+
+# marmoset_MSCA_rnaseq_HVG       0.730
+# marmoset_MSCA_Cluster_NSForest 0.725
+# marmoset_AnimalTFDB_TF         0.638
+# marmoset_MSCA_Xenium           0.601
+# mouse_ABC_Atlas_MERFISH        0.597
+# marmoset_MSCA_Group_NSForest   0.562
+# mouse_ABC_Atlas_taxonomy       0.364
+```
+weirdly doesn't even affect the xenium panel. so those clusters map just as well
+as any other?
+
+```{r}
+### check out just the "inconclusive_mapping" clusters:
+sapply(selfmmc, function(x) {
+    cmt <- filter(cmeta, inconclusive_mapping)
+    x <- filter(x, cell_id %in% cmt$cell_id)
+    stopifnot(identical(x$cell_id, cmt$cell_id))
+    round(
+        sum(x$Cluster_v4_label == cmt$Cluster_v4) / nrow(x),
+        3
+    )
+}) %>% sort(TRUE) %>% cbind
+
+# marmoset_MSCA_rnaseq_HVG       0.737
+# marmoset_MSCA_Cluster_NSForest 0.731
+# marmoset_AnimalTFDB_TF         0.705
+# mouse_ABC_Atlas_MERFISH        0.622
+# marmoset_MSCA_Xenium           0.616
+# marmoset_MSCA_Group_NSForest   0.588
+# mouse_ABC_Atlas_taxonomy       0.397
+```
+
+## (Quick conclusions)
+
+HVG > Clust_NSF > TFs > Panel > Mouse Panel > Group_NSF > ABC Tax Genes
+
+[fraction clusters match, using all, inc. inconclusive_mapping]
+marmoset_MSCA_rnaseq_HVG       0.730
+marmoset_MSCA_Cluster_NSForest 0.725
+marmoset_AnimalTFDB_TF         0.639
+marmoset_MSCA_Xenium           0.601
+mouse_ABC_Atlas_MERFISH        0.597
+marmoset_MSCA_Group_NSForest   0.563
+mouse_ABC_Atlas_taxonomy       0.365
+
+
+Also the "inconclusive_mapping" clusters don't map any worse with the spatial
+panel genes, which I think implies that the spatial panel isn't the reason that
+those clusters didn't map well. 
+
+But even if it's not the panel per se, it could still be a modality difference 
++ the panel that makes them map worse; or they could just be types that actually
+are very similar across multiple structures.
+
+Also the HVGs doing best might be circular because it was used to generate the
+clusters in the first place. 
+
+## (Quick check @ group level)
+
+```{r}
+sapply(selfmmc, function(x) {
+    round(
+        sum(obs[x$Cluster_v4_label, "Subcortex_Group_v4"] == cmeta$Subcortex_Group_v4) / nrow(x),
+        3
+    )
+}) %>% sort(TRUE) %>% cbind
+
+# marmoset_MSCA_rnaseq_HVG       0.927
+# marmoset_MSCA_Cluster_NSForest 0.925
+# marmoset_MSCA_Xenium           0.902 ***
+# mouse_ABC_Atlas_MERFISH        0.902
+# marmoset_MSCA_Group_NSForest   0.895
+# marmoset_AnimalTFDB_TF         0.880
+# mouse_ABC_Atlas_taxonomy       0.754
+```
+
+is it not crazy that the mouse MERFISH and spatial panel have the exact same
+accuracy?
+
+```{r}
+sapply(selfmmc, function(x) {
+    round(
+        sum(obs[x$Cluster_v4_label, "Subcortex_Class_v4"] == cmeta$Subcortex_Class_v4) / nrow(x),
+        3
+    )
+}) %>% sort(TRUE) %>% cbind
+
+# marmoset_MSCA_rnaseq_HVG       0.989
+# marmoset_MSCA_Cluster_NSForest 0.988
+# mouse_ABC_Atlas_MERFISH        0.987
+# marmoset_MSCA_Group_NSForest   0.985
+# marmoset_MSCA_Xenium           0.985 ***
+# marmoset_AnimalTFDB_TF         0.984
+# mouse_ABC_Atlas_taxonomy       0.957
+```
+
+# Gene Set Comparisons
+
+## Compare NSForest to panel
+
+```{r}
+setNames(group_nsfor$nsforest_markers, group_nsfor$Subcortex_Group_v4) %>% 
+    head
+```
+
+for each cluster, save number of its NSForest markers in the gene panel"
+
+```{r}
+setNames(clust_nsfor$nsforest_markers, clust_nsfor$marm_cluster_id) %>%
+    lapply(function(x) gsub("\\'", "", x)) %>%
+    lapply(function(x) strsplit(x, ", ")[[1]]) %>%
+    sapply(function(x) sum(x %in% gene_sets$marmoset_MSCA_Xenium)) ->
+    cl_by_nsfor_in_panel
+```
+
+
+```{r}
+table(cl_by_nsfor_in_panel)
+# 
+#   0   1   2   3   4   5   6 
+# 384 625 448 213  52  13   2 
+```
+
+384 clusters don't have an NSForest marker in the panel, 625 have just 1.
+
+Later, will just check the self-mapping performance of those clusters.
+
+```{r}
+cl_without_nsfor <- cl_by_nsfor_in_panel %>%
+    (function(x) x[x==0]) %>% 
+    names 
+```
+
+
+## (!) Get cluster & group-level F1 scores (each gene set)
+
+```{r}
+selfmmc_f1_clust <- sapply(selfmmc, function(x) f1_per_class(
+    x$Cluster_v4_label, 
+    cmeta$Cluster_v4
+))
+
+# > dim(selfmmc_f1_clust)
+# [1] 1737    7
+
+selfmmc_f1_group <- sapply(selfmmc, function(x) f1_per_class(
+    obs[x$Cluster_v4_label, "Subcortex_Group_v4"], 
+    cmeta$Subcortex_Group_v4
+))
+
+selfmmc_f1_class <- sapply(selfmmc, function(x) f1_per_class(
+    obs[x$Cluster_v4_label, "Subcortex_Class_v4"], 
+    cmeta$Subcortex_Class_v4
+))
+```
+
+### Quick compare: clust F1 of clusts with NSForest vs. those without
+
+```{r}
+data.frame(
+    clust = names(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"]),
+    f1 = unname(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"])
+) %>% 
+    mutate(
+        nsf_in_panel = !clust %in% cl_without_nsfor
+    ) %>% 
+    # .$nsf_in_panel %>% table # verify 384 fa;se
+    ggplot(
+        aes(nsf_in_panel, f1)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x="Cluster Has NSForest Markers in Spatial Panel",
+        y="Cluster Self-Mapping F1 Score",
+        title="Marker Genes in Spatial Panel"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+data.frame(
+    clust = names(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"]),
+    f1 = unname(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"])
+) %>% 
+    mutate(
+        nsfor_markers_in_panel = cl_by_nsfor_in_panel[clust]
+    ) %>% 
+    ggplot(
+        aes(as.character(nsfor_markers_in_panel), f1)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x="Number of NSForest Markers in Spatial Panel",
+        y="Self-Mapping F1 Score using Spatial Panel",
+        title="Cluster Self-Mapping vs. NSForest Representation"
+    ) + 
+    ggpubr::stat_cor() + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_num_nsfclustmarkers_vs_clustf1.pdf"),
+    width=35,height=45,units="mm"
+)
+```
+
+
+```{r}
+data.frame(
+    clust = names(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"]),
+    f1 = unname(selfmmc_f1_clust[, "marmoset_MSCA_Xenium"])
+) %>% 
+    mutate(
+        nsfor_markers_in_panel = cl_by_nsfor_in_panel[clust]
+    ) %>% 
+    ggplot(
+        aes(nsfor_markers_in_panel, f1)
+    ) + 
+    geom_point() + 
+    labs(
+        x="Number of NSForest Markers in Spatial Panel",
+        y="Self-Mapping F1 Score using Spatial Panel",
+        title="Cluster Self-Mapping vs. NSForest Representation"
+    ) + 
+    ggpubr::stat_cor() + 
+    theme_md_classic()
+```
+
+
+### Plot cluster-level F1 scores for the different gene sets
+
+```{r}
+colnames(selfmmc_f1_clust)
+```
+
+
+```{r}
+selfmmc_f1_clust %>% 
+    as.data.frame %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    reshape2::melt(id.vars="cluster", variable.name="gene_set", value.name="F1") %>% 
+    mutate(
+        gene_set = sapply(
+            gene_set, 
+            switch,
+            "marmoset_AnimalTFDB_TF" = "All TFs",
+            "marmoset_MSCA_Cluster_NSForest" = "Cluster NSForest",
+            "marmoset_MSCA_Group_NSForest" =  "Group NSForest",
+            "marmoset_MSCA_rnaseq_HVG" = "4k HVGs",
+            "marmoset_MSCA_Xenium" = "Spatial Panel",
+            "mouse_ABC_Atlas_MERFISH" = "ABC Mouse MERFISH",
+            "mouse_ABC_Atlas_taxonomy" = "ABC Mouse Taxonomy"
+        ),
+        gene_set = factor(gene_set, levels = c(
+            "4k HVGs",
+            "Cluster NSForest",
+            "All TFs",
+            "Spatial Panel",
+            "ABC Mouse MERFISH",
+            "Group NSForest",
+            "ABC Mouse Taxonomy"
+        ))
+    ) %>% 
+    ggplot(aes(gene_set, F1)) + 
+    geom_boxplot(outlier.size = 0.5, outlier.shape = 16, linewidth=0.25) + 
+    scale_y_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    labs(
+        title = "Multiome RNA\nSelf-Mapping Performance",
+        x = "Gene Set Used for MapMyCells",
+        y = "Cluster F1 Score"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    ) -> p1
+p1
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_cluster_f1score_by_set.pdf"),
+    width=50, height=55, units = "mm"
+)
+```
+
+
+again
+
+```{r}
+# > lengths(gene_sets) %>% sort
+#       mouse_ABC_Atlas_taxonomy 
+#                            194 
+#           marmoset_MSCA_Xenium 
+#                            300 
+#   marmoset_MSCA_Group_NSForest 
+#                            398 
+#        mouse_ABC_Atlas_MERFISH 
+#                            500 
+#         marmoset_AnimalTFDB_TF 
+#                           1329 
+# marmoset_MSCA_Cluster_NSForest 
+#                           2916 
+#       marmoset_MSCA_rnaseq_HVG 
+#                           4000
+```
+
+
+```{r}
+selfmmc_f1_group %>% 
+    as.data.frame %>% 
+    tibble::rownames_to_column("group") %>% 
+    reshape2::melt(id.vars="group", variable.name="gene_set", value.name="F1") %>% 
+    mutate(
+        gene_set = sapply(
+            gene_set, 
+            switch,
+            "marmoset_AnimalTFDB_TF" = "All TFs",
+            "marmoset_MSCA_Cluster_NSForest" = "Cluster NSForest",
+            "marmoset_MSCA_Group_NSForest" =  "Group NSForest",
+            "marmoset_MSCA_rnaseq_HVG" = "4k HVGs",
+            "marmoset_MSCA_Xenium" = "Spatial Panel",
+            "mouse_ABC_Atlas_MERFISH" = "ABC Mouse MERFISH",
+            "mouse_ABC_Atlas_taxonomy" = "ABC Mouse Taxonomy"
+        ),
+        gene_set = factor(gene_set, levels = c(
+            "4k HVGs",
+            "Cluster NSForest",
+            "All TFs",
+            "Spatial Panel",
+            "ABC Mouse MERFISH",
+            "Group NSForest",
+            "ABC Mouse Taxonomy"
+        ))
+    ) %>% 
+    ggplot(aes(gene_set, F1)) + 
+    geom_boxplot(outlier.size=0.5, outlier.shape=16, linewidth=0.25) + 
+    scale_y_continuous(limits=c(0,1), expand=c(0,0)) +
+    theme_md_classic() + 
+    labs(
+        title = "Multiome RNA\nSelf-Mapping Performance",
+        x = "Gene Set Used for MapMyCells",
+        y = "Group F1 Score"
+    ) + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    ) -> p2
+p2
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_group_f1score_by_set.pdf"),
+    width=50, height=55, units = "mm"
+)
+```
+
+### Quick aggregate F1 scores (each gene set)
+
+```{r}
+# > colMeans(selfmmc_f1_clust) %>% sort(TRUE) %>% cbind
+# marmoset_MSCA_rnaseq_HVG       0.7456063
+# marmoset_MSCA_Cluster_NSForest 0.7403150
+# marmoset_AnimalTFDB_TF         0.7203095
+# marmoset_MSCA_Xenium           0.6346525
+# mouse_ABC_Atlas_MERFISH        0.6288654
+# marmoset_MSCA_Group_NSForest   0.6025539
+# mouse_ABC_Atlas_taxonomy       0.3944532
+```
+
+just slightly higher than accuracy generally
+
+```{r}
+# > colMeans(selfmmc_f1_group) %>% sort(TRUE) %>% cbind
+# marmoset_MSCA_rnaseq_HVG       0.9128543
+# marmoset_MSCA_Cluster_NSForest 0.9103261
+# mouse_ABC_Atlas_MERFISH        0.8858613
+# marmoset_AnimalTFDB_TF         0.8819890
+# marmoset_MSCA_Xenium           0.8769560
+# marmoset_MSCA_Group_NSForest   0.8724450
+# mouse_ABC_Atlas_taxonomy       0.7092067
+```
+
+Could be weighted by abundance.
+But I think unweighted?taxonomy-weighted (so not abundance) is sensible.
+
+#### Compare to gene set size
+
+```{r}
+data.frame(
+    avg_f1 = colMeans(selfmmc_f1_clust),
+    set_size = lengths(gene_sets)
+) %>% 
+    tibble::rownames_to_column("gene_set") %>% 
+    mutate(
+        gene_set = sapply(
+            gene_set, 
+            switch,
+            "marmoset_AnimalTFDB_TF" = "All TFs",
+            "marmoset_MSCA_Cluster_NSForest" = "Cluster NSForest",
+            "marmoset_MSCA_Group_NSForest" =  "Group NSForest",
+            "marmoset_MSCA_rnaseq_HVG" = "4k HVGs",
+            "marmoset_MSCA_Xenium" = "Spatial Panel",
+            "mouse_ABC_Atlas_MERFISH" = "ABC Mouse MERFISH",
+            "mouse_ABC_Atlas_taxonomy" = "ABC Mouse Taxonomy"
+        ),
+        gene_set = factor(gene_set, levels = c(
+            "4k HVGs",
+            "Cluster NSForest",
+            "All TFs",
+            "Spatial Panel",
+            "ABC Mouse MERFISH",
+            "Group NSForest",
+            "ABC Mouse Taxonomy"
+        )),
+        is_panel = gene_set == "Spatial Panel"
+    ) %>% 
+    ggplot(aes(set_size, avg_f1, label = gene_set, color = is_panel)) + 
+    geom_point() + 
+    ggrepel::geom_text_repel(
+        size=2.5,
+        family="ArialMT"
+    ) + 
+    scale_color_manual(values = c("black", "red3")) + 
+    labs(
+        x = "Genes in Set",
+        y = "Average Cluster-Level F1 Score",
+        title = "Multiome RNA\nSelf-Mapping Performance"
+    ) + 
+    coord_cartesian(xlim=c(0, NA)) + 
+    theme_md_classic() + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_set_size_vs_avg_cluster_f1score.pdf"),
+    width=55, height=50, units = "mm"
+)
+```
+
+```{r}
+data.frame(
+    avg_f1 = colMeans(selfmmc_f1_group),
+    set_size = lengths(gene_sets)
+) %>% 
+    tibble::rownames_to_column("gene_set") %>% 
+    mutate(
+        gene_set = sapply(
+            gene_set, 
+            switch,
+            "marmoset_AnimalTFDB_TF" = "All TFs",
+            "marmoset_MSCA_Cluster_NSForest" = "Cluster NSForest",
+            "marmoset_MSCA_Group_NSForest" =  "Group NSForest",
+            "marmoset_MSCA_rnaseq_HVG" = "4k HVGs",
+            "marmoset_MSCA_Xenium" = "Spatial Panel",
+            "mouse_ABC_Atlas_MERFISH" = "ABC Mouse MERFISH",
+            "mouse_ABC_Atlas_taxonomy" = "ABC Mouse Taxonomy"
+        ),
+        gene_set = factor(gene_set, levels = c(
+            "4k HVGs",
+            "Cluster NSForest",
+            "All TFs",
+            "Spatial Panel",
+            "ABC Mouse MERFISH",
+            "Group NSForest",
+            "ABC Mouse Taxonomy"
+        )),
+        is_panel = gene_set == "Spatial Panel"
+    ) %>% 
+    ggplot(aes(set_size, avg_f1, label = gene_set, color = is_panel)) + 
+    geom_point() + 
+    ggrepel::geom_text_repel(
+        size=2.5,
+        family="ArialMT"
+    ) + 
+    scale_color_manual(values = c("black", "red3")) + 
+    # coord_cartesian(ylim=c(NA, 1), xlim = c(0,4e3), expand=F, clip="off") + 
+    coord_cartesian(xlim=c(0, NA)) + 
+    labs(
+        x = "Genes in Set",
+        y = "Average Group-Level F1 Score",
+        title = "Multiome RNA\nSelf-Mapping Performance"
+    ) + 
+    theme_md_classic() + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_set_size_vs_avg_group_f1score.pdf"),
+    width=60, height=55, units = "mm"
+)
+```
+
+## Compare panel to HVG performance directly
+
+```{r}
+# > cor(selfmmc_f1_clust[, "marmoset_MSCA_rnaseq_HVG"], selfmmc_f1_clust[, "marmoset_MSCA_Xenium"])
+# [1] 0.8952483
+# 
+# cor(selfmmc_f1_clust[, "marmoset_MSCA_rnaseq_HVG"], selfmmc_f1_clust[, "marmoset_MSCA_Xenium"],
+#     method="spearman")
+# [1] 0.8828037
+```
+
+```{r}
+selfmmc_f1_clust[, c("marmoset_MSCA_rnaseq_HVG", "marmoset_MSCA_Xenium")] %>% 
+    as.data.frame %>% 
+    tibble::rownames_to_column("Cluster_v4") %>% 
+    (function(x) {
+        x$Subcortex_Class_v4 <- obs[x$Cluster_v4, "Subcortex_Class_v4"]
+        x
+    }) %>% 
+    ggplot(
+        aes(marmoset_MSCA_rnaseq_HVG, marmoset_MSCA_Xenium, color = Subcortex_Class_v4)
+    ) + 
+    geom_point(size=0.5) + 
+    geom_abline(slope=1, intercept=0, linewidth=0.25) + 
+    scale_color_manual(values = palettes$Class) + 
+    coord_cartesian(xlim=c(0,1), ylim=c(0,1), expand=FALSE) + 
+    labs(x = "4k HVGs\nCluster F1 Scores", y = "Spatial Panel\nCluster F1 Scores", title = "Multiome RNA\nSelf-Mapping Performance") + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_HVGs_vs_Panel_avg_cluster_f1score_color_class.pdf"),
+    width=90, height=55, units = "mm"
+)
+```
+
+
+```{r}
+selfmmc_f1_group[, c("marmoset_MSCA_rnaseq_HVG", "marmoset_MSCA_Xenium")] %>% 
+    as.data.frame %>% 
+    tibble::rownames_to_column("Subcortex_Group_v4") %>% 
+    left_join(
+        unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]),
+        by = "Subcortex_Group_v4"
+    ) %>% 
+    ggplot(
+        aes(marmoset_MSCA_rnaseq_HVG, marmoset_MSCA_Xenium, color = Subcortex_Class_v4)
+    ) + 
+    geom_point(size=0.5) + 
+    geom_abline(slope=1, intercept=0, linewidth=0.25) + 
+    scale_color_manual(values = palettes$Class) + 
+    coord_cartesian(xlim=c(0,1), ylim=c(0,1), expand=FALSE) +
+    labs(x = "4k HVGs\nGroup F1 Scores", y = "Spatial Panel\nGroup F1 Scores", title = "Multiome RNA\nSelf-Mapping Performance") + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_HVGs_vs_Panel_avg_group_f1score_color_class.pdf"),
+    width=90, height=55, units = "mm"
+)
+```
+
+
+## (!) Which groups/clusters are most affected by panel vs. HVGs?
+
+For instance, Oligo OPALIN vs. PLEKHG1, is self-mapping similar or worse if
+use HVGs?
+
+(Duplicating plots above)
+
+```{r}
+selfmmc_f1_group %>% 
+    as.data.frame %>% 
+    .[, c("marmoset_MSCA_Xenium", "marmoset_MSCA_rnaseq_HVG")] %>% 
+    setNames(c("Panel", "HVGs")) %>% 
+    tibble::rownames_to_column("group") %>% 
+    mutate(
+        diff = Panel - HVGs,
+        label_group = ifelse(rank(diff)<=5, group, "")
+    ) %>% 
+    left_join(
+        unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]),
+        by = join_by(group == Subcortex_Group_v4)
+    ) %>% 
+    ggplot(aes(HVGs, Panel)) + 
+    geom_point(
+        aes(color=Subcortex_Class_v4),
+        size=0.5,shape=16
+    ) + 
+    geom_smooth(method="lm", color="black", size=0.5) +
+    geom_abline(intercept=0, slope=1, linewidth=0.25, linetype="dashed") + 
+    ggpubr::stat_cor(label.y.npc=0.9, size=2, family="ArialMT") +
+    ggpubr::stat_regline_equation(label.y.npc=1, size=2, family="ArialMT") + 
+    ggrepel::geom_text_repel(
+        aes(label=label_group, color=Subcortex_Class_v4),
+        size=2, family="ArialMT", min.segment.length=0, max.overlaps = Inf
+    ) +
+    scale_color_manual(values=palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nGroup-Level F1 Scores by Gene Set",
+        x = "4k HVGs",
+        y = "300 Gene Spatial Panel"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_group_f1_4khvgs_vs_panel.pdf"),
+    width=80, height=50, units="mm"
+)
+```
+
+make axes identical:
+and actually maybe change which dots are labelled...
+
+```{r}
+selfmmc_f1_group %>% 
+    as.data.frame %>% 
+    .[, c("marmoset_MSCA_Xenium", "marmoset_MSCA_rnaseq_HVG")] %>% 
+    setNames(c("Panel", "HVGs")) %>% 
+    tibble::rownames_to_column("group") %>% 
+    mutate(
+        diff = Panel - HVGs,
+        # label_group = ifelse(rank(diff)<=5, group, "")
+        label_group = ifelse(rank(Panel)<=10, group, "")
+    ) %>% 
+    left_join(
+        unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]),
+        by = join_by(group == Subcortex_Group_v4)
+    ) %>% 
+    ggplot(aes(HVGs, Panel)) + 
+    geom_point(
+        aes(color=Subcortex_Class_v4),
+        size=0.5,shape=16
+    ) + 
+    geom_smooth(method="lm", color="black", size=0.5) +
+    geom_abline(intercept=0, slope=1, linewidth=0.25, linetype="dashed") + 
+    ggpubr::stat_cor(label.y.npc=0.9, size=2, family="ArialMT") +
+    ggpubr::stat_regline_equation(label.y.npc=1, size=2, family="ArialMT") + 
+    ggrepel::geom_text_repel(
+        aes(label=label_group, color=Subcortex_Class_v4),
+        size=2, family="ArialMT", min.segment.length=0, max.overlaps = Inf
+    ) +
+    scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(xlim=c(0.4,1), ylim=c(0.4,1)) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nGroup-Level F1 Scores by Gene Set",
+        x = "4k HVGs",
+        y = "300 Gene Spatial Panel"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_group_f1_4khvgs_vs_panel2.pdf"),
+    width=80, height=50, units="mm"
+)
+```
+
+
+
+Should do that with cluster-level F1 by group instead?
+
+```{r}
+selfmmc_f1_clust %>% 
+    as.data.frame %>% 
+    .[, c("marmoset_MSCA_Xenium", "marmoset_MSCA_rnaseq_HVG")] %>% 
+    setNames(c("Panel", "HVGs")) %>% 
+    tibble::rownames_to_column("cluster") %>% 
+    cbind(., obs[.$cluster, c("Subcortex_Group_v4", "Subcortex_Class_v4")]) %>% 
+    split(., .$Subcortex_Group_v4) %>% 
+    lapply(function(x) data.frame(
+        group = unique(x$Subcortex_Group_v4),
+        Panel = mean(x$Panel),
+        HVGs = mean(x$HVGs),
+        class = unique(x$Subcortex_Class_v4)
+    )) %>% 
+    bind_rows %>% 
+    mutate(
+        diff = Panel - HVGs,
+        label_group = ifelse(rank(diff)<=5, group, "")
+    ) %>% 
+    ggplot(aes(HVGs, Panel)) + 
+    geom_point(
+        aes(color=class),
+        size=0.5,shape=16
+    ) + 
+    geom_smooth(method="lm", color="black", size=0.5) +
+    geom_abline(intercept=0, slope=1, linewidth=0.25, linetype="dashed") + 
+    ggpubr::stat_cor(label.y.npc=0.9, size=2, family="ArialMT") +
+    ggpubr::stat_regline_equation(label.y.npc=1, size=2, family="ArialMT") + 
+    ggrepel::geom_text_repel(
+        aes(label=label_group, color=class),
+        size=2, family="ArialMT", min.segment.length=0, max.overlaps = Inf
+    ) +
+    scale_color_manual(values=palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nAverage Cluster-Level F1 by Group",
+        x = "4k HVGs",
+        y = "300 Gene Spatial Panel"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_cluster_f1_4khvgs_vs_panel.pdf"),
+    width=80, height=50, units="mm"
+)
+```
+
+
+# (!) Performance Tables for Spatial Panel
+
+## Helper fxn
+
+```{r}
+# tbl is a raw tabulation object (2 dims, rows are predictions, columns are truths),
+# e.g.: tbl <- table(df[, c("prediction", "truth")])
+#
+# I had chatgpt write this tedious thing but it all checks out
+pred_score_fxn <- function(tbl, top_n = 3, zero_alt_as_na = TRUE) {
+    # make tbl into a normal matrix
+    cm <- as.matrix(unclass(tbl))
+    
+    storage.mode(cm) <- "numeric"
+    
+    if (is.null(rownames(cm)) || is.null(colnames(cm))) {
+        stop("cm must have rownames (pred labels) and colnames (truth labels).")
+    }
+    
+    pred_labels  <- rownames(cm)
+    truth_labels <- colnames(cm)
+    n_pred  <- rowSums(cm)
+    n_truth <- colSums(cm)
+    
+    # Match each predicted label to the corresponding truth column (for diagonal-by-name)
+    truth_col_idx <- match(pred_labels, truth_labels)
+    
+    # True positives per predicted class (0 if no matching truth column exists)
+    tp <- numeric(length(pred_labels))
+    has_match <- !is.na(truth_col_idx)
+    tp[has_match] <- cm[cbind(which(has_match), truth_col_idx[has_match])]
+    
+    # Precision = P(truth = pred | pred)  (this is your "odds it's correct" as a probability)
+    precision <- ifelse(n_pred > 0, tp / n_pred, NA_real_)
+    
+    # Recall for completeness (used for F1)
+    recall <- rep(NA_real_, length(pred_labels))
+    recall[has_match] <- ifelse(
+        n_truth[truth_col_idx[has_match]] > 0,
+        tp[has_match] / n_truth[truth_col_idx[has_match]],
+        NA_real_
+    )
+    
+    # F1
+    f1 <- ifelse(
+        is.na(precision) | is.na(recall) | (precision + recall == 0),
+        0,
+        2 * precision * recall / (precision + recall)
+    )
+    
+    # Row-normalized confusion: P(truth | pred)
+    denom <- pmax(n_pred, 1)  # avoid divide-by-zero
+    post <- sweep(cm, 1, denom, "/", check.margin = FALSE)
+    
+    # Build top confusion columns
+    out <- data.frame(
+        prediction = pred_labels,
+        n_pred     = as.integer(n_pred),
+        n_truth    = as.integer(n_truth),
+        precision  = precision,
+        recall     = recall,
+        f1         = f1,
+        p_alt      = 1 - precision,
+        stringsAsFactors = FALSE
+    )
+    
+    # Initialize top confusion columns
+    for (k in seq_len(top_n)) {
+        out[[paste0("alt", k)]] <- NA_character_
+        out[[paste0("p_alt", k)]] <- NA_real_
+    }
+    
+    # Fill in top alternatives per predicted class
+    for (i in seq_len(nrow(cm))) {
+        pvec <- post[i, ]
+        
+        # Remove the "correct" class from alternatives (by matched column name)
+        j <- truth_col_idx[i]
+        if (!is.na(j)) pvec[j] <- 0
+        
+        ord <- order(pvec, decreasing = TRUE)
+        
+        if (zero_alt_as_na) {
+            ord <- ord[pvec[ord] > 0]
+        }
+        
+        if (length(ord) == 0) next
+        
+        take <- head(ord, top_n)
+        for (k in seq_along(take)) {
+            out[[paste0("alt", k)]][i]   <- truth_labels[take[k]]
+            out[[paste0("p_alt", k)]][i] <- pvec[take[k]]
+        }
+    }
+    rownames(out) <- NULL
+    
+    # rounding for pretty
+    for (cname in colnames(out)) {
+        if (is.numeric(out[[cname]])) {
+            out[[cname]] <- round(out[[cname]], 4)
+        }
+    }
+    out
+}
+```
+
+
+## Cluster
+
+"If a spatial cluster has this mapping, is it likely it really belongs to 
+another cluster? And what is that cluster?"
+
+So based on the assigned cluster, want an assessment of if it should be 
+believed, and if anything is interchangeable.
+
+```{r}
+# cluster-level truth table
+tbl_clust <- data.frame(
+    pred = selfmmc$marmoset_MSCA_Xenium$Cluster_v4_label,
+    truth = cmeta$Cluster_v4
+) %>% 
+    mutate(
+        pred  = factor(pred,  levels = rownames(obs)),
+        truth = factor(truth, levels = rownames(obs)),
+    ) %>% 
+    table
+
+# > sum(diag(tbl_clust)) / sum(tbl_clust)
+# [1] 0.6011515
+```
+
+```{r}
+tbl_clust %>% 
+    pred_score_fxn %>% 
+    cbind(., obs[.$prediction, c("Subcortex_Group_v4", "Subcortex_Class_v4")]) %>% 
+    `rownames<-`(NULL) ->
+    pred_accuracy_table
+```
+
+## Group
+
+```{r}
+tbl_group <- data.frame(
+    pred = obs[selfmmc$marmoset_MSCA_Xenium$Cluster_v4_label, "Subcortex_Group_v4"],
+    truth = cmeta$Subcortex_Group_v4
+) %>% 
+    mutate(
+        pred  = factor(pred,  levels = sort(unique(obs$Subcortex_Group_v4))),
+        truth = factor(truth, levels = sort(unique(obs$Subcortex_Group_v4))),
+    ) %>% 
+    table
+
+# > sum(diag(tbl_group)) / sum(tbl_group)
+# [1] 0.9019291
+```
+
+```{r}
+tbl_group %>% 
+    pred_score_fxn %>% 
+    left_join(
+        unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")]), 
+        by = join_by("prediction" == "Subcortex_Group_v4")
+    ) ->
+    pred_accuracy_table_group
+```
+
+## Dominant Region
+
+So this isn't by cluster, which is another good question to ask I think.
+But let's see just if we take the dominant region only.
+
+```{r}
+tbl_region <- data.frame(
+    pred = obs[selfmmc$marmoset_MSCA_Xenium$Cluster_v4_label, "Cluster_Dominant_Region"],
+    truth = cmeta$Cluster_Dominant_Region
+) %>% 
+    mutate(
+        pred  = factor(pred,  levels = sort(unique(obs$Cluster_Dominant_Region))),
+        truth = factor(truth, levels = sort(unique(obs$Cluster_Dominant_Region))),
+    ) %>% 
+    table
+```
+
+```{r}
+# > sum(diag(tbl_region)) / sum(tbl_region)
+# [1] 0.9469096
+```
+
+```{r}
+# nms_keep <- setdiff(colnames(tbl_region), c("", "Multi"))
+# sum(diag(tbl_region[nms_keep,nms_keep])) / sum(tbl_region[nms_keep,nms_keep])
+# [1] 0.9746392
+```
+
+```{r}
+# how many cells in "Multi"
+# > sum(cmeta$Cluster_Dominant_Region == "Multi")
+# [1] 47489
+# sum(cmeta$Cluster_Dominant_Region == "Multi") / sum(cmeta$Cluster_NT != "NN")
+# [1] 0.06994817
+```
+
+
+```{r}
+tbl_region %>% 
+    pred_score_fxn -> 
+    pred_accuracy_table_region
+```
+
+```{r}
+pred_accuracy_table_region
+```
+
+
+
+## (!) Write out
+
+```{r}
+write.csv(
+    pred_accuracy_table,
+    file.path(pdir_data, "MapMyCells_selfmapping_accuracy_by_Cluster.csv"),
+    row.names=FALSE
+)
+
+write.csv(
+    pred_accuracy_table_group,
+    file.path(pdir_data, "MapMyCells_selfmapping_accuracy_by_Group.csv"),
+    row.names=FALSE
+)
+
+write.csv(
+    pred_accuracy_table_region,
+    file.path(pdir_data, "MapMyCells_selfmapping_accuracy_by_Region.csv"),
+    row.names=FALSE
+)
+```
+
+Also I'll write out the truth tables
+
+```{r}
+write.csv(
+    tbl_clust,
+    file.path(pdir_data, "MapMyCells_selfmapping_truthtable_by_Cluster.csv"),
+)
+
+write.csv(
+    tbl_group,
+    file.path(pdir_data, "MapMyCells_selfmapping_truthtable_by_Group.csv"),
+)
+```
+
+
+# More Analysis (using output tables)
+
+## (Which class is the worst based on group-level accuracy?)
+
+```{r}
+pred_accuracy_table_group %>% 
+    (function(x) {
+        df <- unique(obs[, c("Subcortex_Group_v4", "Subcortex_Class_v4")])
+        nm_map <- setNames(df$Subcortex_Class_v4, df$Subcortex_Group_v4)
+        x$class <- nm_map[x$prediction]
+        x
+    }) %>% 
+    split(., .$class) %>% 
+    sapply(. %>% .[, 2:4] %>% sapply(mean)) %>% 
+    t %>% 
+    as.data.frame %>% 
+    .[order(.$f1), ] %>% 
+    print.data.frame
+```
+
+
+```
+               precision    recall        f1
+HTH GABA       0.7872906 0.8227793 0.8022492
+SEP GABA       0.8165505 0.8149316 0.8116518
+THM GABA       0.7957791 0.8435605 0.8162433
+THM Glut       0.8326849 0.8671886 0.8446930
+MB-HB Glut     0.8262519 0.9032558 0.8525491
+CNU-HTH GABA   0.8493468 0.8642864 0.8557087
+HTH Glut       0.8579388 0.8612008 0.8578431
+CNU-HTH Glut   0.8479837 0.8786418 0.8580964
+CTX-MGE GABA   0.8727014 0.8683663 0.8703823
+CTX-CGE GABA   0.8830038 0.9095977 0.8954780
+TEL Glut       0.8985722 0.9073601 0.9017274
+Nonneuron      0.8964207 0.9468686 0.9090820
+BG             0.9081178 0.9201542 0.9130273
+MB-HB GABA     0.9369022 0.9257973 0.9311404
+HTH Hist       0.9603175 0.9565217 0.9584158
+MB-HTH-HB Sero 0.9882812 0.9844358 0.9863548
+Pineal Gland   1.0000000 0.9756098 0.9876543
+```
+
+## Plots
+
+### Cluster-level
+
+```{r}
+pred_accuracy_table %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(score, metric)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    # labs(title = "Multiome RNA Self-Mapping\nPerformance at the Cluster-Level", y=NULL, x=NULL) +
+    labs(title = "Multiome RNA Self-Mapping\nPerformance at the Cluster-Level") +
+    scale_x_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() -> p1
+p1
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_cluster_precision_recall_f1.pdf"),
+    width=50, height=25, units = "mm"
+)
+```
+
+```{r}
+pred_accuracy_table %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(metric, score)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    labs(title = "Cluster-Level") +
+    scale_y_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1)) -> p3
+p3
+```
+
+MMC is better at retaining true calls than keeping pure. that could explain
+why the metacells look pretty good: individual assignments might be a little
+messy but on the whole the cluster has a lot of true positives.
+
+also outliers: clusters for which, if the classifer calls it, it's like always
+wrong.
+
+```{r}
+pred_accuracy_table %>% 
+    ggplot(
+        aes(precision, recall, color=Subcortex_Class_v4)
+    ) + 
+    geom_point() + 
+    scale_color_manual(values=palettes$Class) + 
+    labs(x="precision", y="recall") + 
+    theme_md_bw()
+```
+
+ggmarginal would be nice
+
+```{r}
+pred_accuracy_table %>% 
+    ggplot(
+        aes(precision)
+    ) + 
+    geom_density() + 
+    # scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,2)) +
+    labs(x="precision", y="density") + 
+    theme_md_bw()
+
+pred_accuracy_table %>% 
+    ggplot(
+        aes(precision, color=Subcortex_Class_v4)
+    ) + 
+    geom_density() + 
+    scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,2.5)) + 
+    labs(x="precision", y="density") + 
+    theme_md_bw()
+
+pred_accuracy_table %>% 
+    ggplot(
+        aes(f1)
+    ) + 
+    geom_density() + 
+    # scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,3)) +
+    labs(x="f1", y="density") + 
+    theme_md_bw()
+```
+
+### Group-level
+
+```{r}
+pred_accuracy_table_group %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(score, metric)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    # labs(title = "Multiome RNA Self-Mapping\nPerformance at the Cluster-Level", y=NULL, x=NULL) +
+    labs(title = "Multiome RNA Self-Mapping\nPerformance at the Group-Level") +
+    scale_x_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() -> p2
+p2
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_group_precision_recall_f1.pdf"),
+    width=50, height=25, units = "mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_cluster_and_group_precision_recall_f1.pdf"),
+    p1 / p2,
+    width=50, height=43, units = "mm"
+)
+```
+
+```{r}
+pred_accuracy_table_group %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(metric, score)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    labs(title = "Group-Level") +
+    scale_y_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    theme(axis.text.x = element_text(angle=30, hjust=1, vjust=1)) -> p4
+p4
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_cluster_and_group_precision_recall_f1_flip.pdf"),
+    p3 + p4,
+    width=40, height=45, units = "mm"
+)
+```
+
+```{r}
+pred_accuracy_table_group %>% 
+    ggplot(
+        aes(precision, recall, color=Subcortex_Class_v4)
+    ) + 
+    geom_point() + 
+    scale_color_manual(values=palettes$Class) + 
+    labs(x="precision", y="recall", title = "Group-Level") + 
+    theme_md_bw()
+```
+
+
+```{r}
+pred_accuracy_table_group %>% 
+    ggplot(
+        aes(precision)
+    ) + 
+    geom_density() + 
+    # scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,5)) +
+    labs(x="precision", y="density") + 
+    theme_md_bw()
+
+pred_accuracy_table_group %>% 
+    ggplot(
+        aes(precision, color=Subcortex_Class_v4)
+    ) + 
+    geom_density() + 
+    scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,12)) +
+    labs(x="precision", y="density", title = "Group-Level") + 
+    theme_md_bw()
+```
+
+
+```{r}
+pred_accuracy_table_group %>% 
+    # order by mean
+    (function(x) {
+        split(x$precision, x$Subcortex_Class_v4) %>% sapply(mean) %>% sort %>% names -> nm_ord
+        x$Subcortex_Class_v4 <- factor(x$Subcortex_Class_v4, levels = nm_ord)
+        x
+    }) %>% 
+    ggplot(
+        aes(Subcortex_Class_v4, precision, color=Subcortex_Class_v4)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.size=0.25) + 
+    scale_color_manual(values=palettes$Class) + 
+    # coord_cartesian(clip="off", expand=FALSE, ylim=c(0,30)) +
+    labs(x="Class", y="Group-Level Precision", title = "Multiome RNA\nSelf-Mapping Performance") + 
+    coord_flip() + 
+    theme_md_classic() + 
+    theme(
+        # axis.text.x=element_text(angle=30, hjust=1, vjust=1),
+        legend.position="none"
+    )
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_group_precision_by_class.pdf"),
+    width=50, height=50, units = "mm"
+)
+```
+
+
+```{r}
+pred_accuracy_table_group %>% 
+    ggplot(
+        aes(f1)
+    ) + 
+    geom_density() + 
+    # scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,5)) +
+    labs(x="f1", y="density") + 
+    theme_md_bw()
+
+pred_accuracy_table_group %>% 
+    ggplot(
+        aes(f1, color=Subcortex_Class_v4)
+    ) + 
+    geom_density() + 
+    scale_color_manual(values=palettes$Class) + 
+    coord_cartesian(clip="off", expand=FALSE, ylim=c(0,30)) +
+    labs(x="f1", y="density", title = "Group-Level") + 
+    theme_md_bw()
+```
+
+```{r}
+pred_accuracy_table_group %>% 
+    # order by mean
+    (function(x) {
+        split(x$f1, x$Subcortex_Class_v4) %>% sapply(mean) %>% sort %>% names -> nm_ord
+        x$Subcortex_Class_v4 <- factor(x$Subcortex_Class_v4, levels = nm_ord)
+        x
+    }) %>% 
+    ggplot(
+        aes(Subcortex_Class_v4, f1, color=Subcortex_Class_v4)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.size=0.25) + 
+    scale_color_manual(values=palettes$Class) + 
+    # coord_cartesian(clip="off", expand=FALSE, ylim=c(0,30)) +
+    labs(x="Class", y="Group-Level F1 Score", title = "Multiome RNA\nSelf-Mapping Performance") + 
+    coord_flip() + 
+    theme_md_classic() + 
+    theme(
+        # axis.text.x=element_text(angle=30, hjust=1, vjust=1),
+        legend.position="none"
+    )
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_group_f1_by_class.pdf"),
+    width=50, height=50, units = "mm"
+)
+```
+
+
+
+### Region-level
+
+```{r}
+pred_accuracy_table_region %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(score, metric)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    # labs(title = "Multiome RNA Self-Mapping\nPerformance at the Cluster-Level", y=NULL, x=NULL) +
+    labs(title = "Multiome RNA Self-Mapping\nPerformance at the Region-Level") +
+    scale_x_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() -> p2
+p2
+```
+
+```{r}
+# ggsave(
+#     file.path(pdir_plots, "boxplot_region_precision_recall_f1.pdf"),
+#     width=50, height=25, units = "mm"
+# )
+```
+
+
+wait flip and drop "" and "Multi"
+
+```{r}
+pred_accuracy_table_region %>% 
+    filter(!prediction %in% c("", "Multi")) %>% 
+    .[, c("prediction", "precision", "recall", "f1")] %>% 
+    reshape2::melt(id.vars="prediction", variable.name="metric", value.name="score") %>% 
+    mutate(metric=factor(metric, levels=rev(c("precision", "recall", "f1")))) %>% 
+    ggplot(
+        aes(metric, score)
+    ) + 
+    geom_boxplot(linewidth=0.25, outlier.shape=16, outlier.size=0.5) + 
+    # labs(title = "Multiome RNA Self-Mapping\nPerformance at the Cluster-Level", y=NULL, x=NULL) +
+    labs(title = "Region-Level\nSelf-Mapping") +
+    scale_y_continuous(limits=c(0,1), expand=c(0,0)) + 
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1, vjust=1)
+    )
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_region_precision_recall_f1.pdf"),
+    width=20, height=40, units = "mm"
+)
+```
+
+
+```{r}
+pred_accuracy_table_region %>% 
+    filter(!prediction %in% c("", "Multi")) %>% 
+    ggplot(
+        aes(precision, recall, color = prediction, label = prediction)
+    ) + 
+    geom_point() + 
+    ggrepel::geom_text_repel(size=2, max.overlaps=Inf, min.segment.length = 0) + 
+    scale_color_manual(values = palettes$Region) + 
+    labs(title = "Self-Mapping to Annotated Region") + 
+    theme_md_classic()  + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_region_precision_vs_recall.pdf"),
+    width=50, height=50, units = "mm"
+)
+```
+
+
+# (Check for magnet clusters)
+
+```{r}
+pred_accuracy_table %>% 
+    arrange(desc(n_pred / n_truth)) %>% 
+    head(30) %>% 
+    print.data.frame
+```
+
+```
+     prediction n_pred n_truth precision recall     f1  p_alt         alt1 p_alt1         alt2 p_alt2         alt3 p_alt3
+1     cluster_2   5137      76    0.0105 0.7105 0.0207 0.9895    cluster_7 0.9319    cluster_1 0.0274   cluster_11 0.0134
+2     cluster_4   3902     189    0.0292 0.6032 0.0557 0.9708    cluster_7 0.9218    cluster_1 0.0279   cluster_10 0.0151
+3    cluster_12    847      53    0.0401 0.6415 0.0756 0.9599   cluster_10 0.3294    cluster_9 0.1913    cluster_7 0.1795
+4   cluster_848   1029      81    0.0564 0.7160 0.1045 0.9436  cluster_846 0.5345  cluster_847 0.3168  cluster_849 0.0330
+5   cluster_122    378      30    0.0714 0.9000 0.1324 0.9286  cluster_136 0.6614  cluster_138 0.0847  cluster_139 0.0582
+6   cluster_758    314      25    0.0573 0.7200 0.1062 0.9427  cluster_763 0.4268  cluster_756 0.4076  cluster_757 0.0510
+7   cluster_809    636      58    0.0786 0.8621 0.1441 0.9214  cluster_794 0.6494  cluster_808 0.0723  cluster_806 0.0377
+8     cluster_8   9714     956    0.0516 0.5241 0.0939 0.9484    cluster_7 0.7593   cluster_10 0.1189    cluster_9 0.0498
+9    cluster_16    462      49    0.1017 0.9592 0.1840 0.8983    cluster_7 0.8874 cluster_1032 0.0065    cluster_1 0.0043
+10  cluster_115   1317     149    0.0888 0.7852 0.1596 0.9112  cluster_114 0.8087  cluster_119 0.0364  cluster_117 0.0175
+11 cluster_1744    725      84    0.0938 0.8095 0.1681 0.9062 cluster_1741 0.8000 cluster_1745 0.0400 cluster_1743 0.0359
+12   cluster_59    400      49    0.0775 0.6327 0.1381 0.9225  cluster_119 0.4725   cluster_60 0.1325  cluster_147 0.0625
+13  cluster_852   2496     306    0.0641 0.5229 0.1142 0.9359  cluster_846 0.4211  cluster_847 0.2580  cluster_849 0.1655
+14   cluster_14    680      85    0.0912 0.7294 0.1621 0.9088   cluster_13 0.4294   cluster_10 0.3015    cluster_9 0.0853
+15 cluster_1739   2472     317    0.0696 0.5426 0.1233 0.9304 cluster_1741 0.5243 cluster_1738 0.3256 cluster_1743 0.0542
+16 cluster_1742   4079     550    0.0963 0.7145 0.1698 0.9037 cluster_1741 0.8022 cluster_1743 0.0481 cluster_1738 0.0378
+17  cluster_793    265      38    0.1358 0.9474 0.2376 0.8642  cluster_792 0.4792  cluster_791 0.2566  cluster_690 0.0717
+18  cluster_121    669      96    0.1001 0.6979 0.1752 0.8999  cluster_119 0.5247  cluster_130 0.0717  cluster_117 0.0703
+19  cluster_796    385      56    0.1169 0.8036 0.2041 0.8831  cluster_798 0.2286  cluster_794 0.1896  cluster_802 0.1688
+20   cluster_58   1763     263    0.1146 0.7681 0.1994 0.8854  cluster_119 0.6676   cluster_57 0.0891   cluster_54 0.0306
+21  cluster_851    757     115    0.0766 0.5043 0.1330 0.9234  cluster_849 0.3012  cluster_846 0.2285  cluster_853 0.1651
+22   cluster_84    392      62    0.0918 0.5806 0.1586 0.9082  cluster_136 0.2832   cluster_70 0.1811   cluster_83 0.0791
+23 cluster_1195    288      47    0.1250 0.7660 0.2149 0.8750 cluster_1184 0.6458 cluster_1192 0.0903 cluster_1232 0.0347
+24   cluster_17    538      89    0.1134 0.6854 0.1946 0.8866   cluster_24 0.2695   cluster_22 0.2212   cluster_37 0.1524
+25   cluster_15   1417     240    0.1171 0.6917 0.2004 0.8829    cluster_7 0.4799   cluster_10 0.2075    cluster_9 0.0614
+26  cluster_607    187      33    0.1444 0.8182 0.2455 0.8556  cluster_606 0.4385  cluster_608 0.1444  cluster_615 0.1444
+27  cluster_246    140      25    0.1571 0.8800 0.2667 0.8429  cluster_244 0.5357  cluster_241 0.2000  cluster_250 0.0500
+28    cluster_1   7601    1393    0.0906 0.4946 0.1532 0.9094    cluster_7 0.8783   cluster_10 0.0159   cluster_92 0.0034
+29  cluster_225    206      38    0.1505 0.8158 0.2541 0.8495  cluster_212 0.2330  cluster_778 0.2282  cluster_197 0.1019
+30  cluster_111    340      63    0.1618 0.8730 0.2730 0.8382   cluster_92 0.6647  cluster_110 0.1441   cluster_89 0.0147
+      Subcortex_Group_v4 Subcortex_Class_v4
+1           Oligo OPALIN          Nonneuron
+2           Oligo OPALIN          Nonneuron
+3          Oligo PLEKHG1          Nonneuron
+4              Microglia          Nonneuron
+5     STRd D1 Matrix MSN                 BG
+6         LGmc-LGpc Glut           THM Glut
+7            Astro-TE NN          Nonneuron
+8          Oligo PLEKHG1          Nonneuron
+9                    COP          Nonneuron
+10 STRd D2 Striosome MSN                 BG
+11               DG Glut           TEL Glut
+12    STRd D2 Matrix MSN                 BG
+13             Microglia          Nonneuron
+14         Oligo PLEKHG1          Nonneuron
+15               DG Glut           TEL Glut
+16               DG Glut           TEL Glut
+17           Astro-WM NN          Nonneuron
+18    STRd D2 Matrix MSN                 BG
+19           Astro-TE NN          Nonneuron
+20    STRd D2 Matrix MSN                 BG
+21             Microglia          Nonneuron
+22           STRv D1 MSN                 BG
+23               La Glut           TEL Glut
+24              THM GABA           THM GABA
+25         Oligo PLEKHG1          Nonneuron
+26      L2-3 IT CTX Glut           TEL Glut
+27   STR D1D2 Hybrid MSN                 BG
+28          Oligo OPALIN          Nonneuron
+29            VP-MG Glut           THM Glut
+30               ImOligo          Nonneuron
+```
+
+
+# Identify confusion hot spots
+
+Ideas:
+Low `precision` + High `n_pred` = impure prediction labels
+Large `n_pred` * `p_alt1` = big confusion flow
+
+(in hindsight, de-emphasized n_pred in final outputs; not as concerned with
+support as just performance for all cell types in taxonomy)
+
+## Group-level weighted precision
+
+```{r}
+# weighted by number of cells in each Group
+pred_accuracy_table_group %>% 
+    (function(x) {
+        weights <- x$n_truth / sum(x$n_truth)
+        sum(x$precision * weights)
+    }) 
+# [1] 0.9145346
+
+# weighted by number of cells in each prediction Group
+pred_accuracy_table_group %>% 
+    (function(x) {
+        weights <- x$n_pred/ sum(x$n_pred)
+        sum(x$precision * weights)
+    }) 
+# [1] 0.9019268
+
+## the unweighted (fraction of cells with correct group label)
+sum(diag(tbl_group)) / sum(tbl_group)
+# [1] 0.9019291
+```
+
+Similar no matter how you cut it
+
+## Worst groups by scores
+
+```{r}
+pred_accuracy_table_group %>% arrange(f1) %>% head(10) %>% print.data.frame
+```
+
+```
+              prediction n_pred n_truth precision recall     f1  p_alt                        alt1 p_alt1
+1          SPAR-MEN Glut     38      14    0.2895 0.7857 0.4231 0.7105                    PAG Glut 0.2105
+2               THM Glut    381     203    0.4199 0.7882 0.5479 0.5801                    VLN Glut 0.2598
+3               AMY Glut    933     677    0.4737 0.6529 0.5491 0.5263                     BL Glut 0.1972
+4            MB-THM GABA   1619    1190    0.4818 0.6555 0.5554 0.5182                 THM-MB GABA 0.3502
+5                    COP   1280     513    0.3898 0.9727 0.5566 0.6102                Oligo OPALIN 0.3234
+6              PnRa Glut     53      32    0.4906 0.8125 0.6118 0.5094              VTH-MB-HB Glut 0.2075
+7  LH OTP-SIM1-EBF3 Glut    665     747    0.6632 0.5904 0.6246 0.3368              VTH-MB-HB Glut 0.1398
+8     PHN GSX1-DLK1 GABA    487     502    0.6366 0.6175 0.6269 0.3634 HTHtu-HTHpo NTS-SEMA3C GABA 0.1006
+9          Oligo PLEKHG1  25970   13235    0.4803 0.9425 0.6363 0.5197                Oligo OPALIN 0.5184
+10     ArH-PeV GHRH GABA    164     127    0.5671 0.7323 0.6392 0.4329               ArH TBX3 GABA 0.1402
+                        alt2 p_alt2                         alt3 p_alt3 Subcortex_Class_v4
+1  PAG-IC-SC TFAP2D-MAF Glut 0.2105                 VTR-HTH Glut 0.1053         MB-HB Glut
+2   MD-IMD-VL-MG-PO-PLi Glut 0.0997                     Pul Glut 0.0735           THM Glut
+3                    La Glut 0.1543                   BM-Co Glut 0.0750           TEL Glut
+4                   THM GABA 0.1155             SCzo GABRR2 GABA 0.0513           THM GABA
+5                        OPC 0.2859                  Astro-WM NN 0.0008          Nonneuron
+6                    ZI Glut 0.2075 SN-VTR-HTH GATA3-TCF7L2 GABA 0.0377         MB-HB Glut
+7                   PAG Glut 0.0316              MB-HB PAX5 GABA 0.0301           HTH Glut
+8            HTH-ZI-MeR GABA 0.0370        LH OTP-SIM1-EBF3 Glut 0.0349           HTH GABA
+9                    ImOligo 0.0011                    Ependymal 0.0001          Nonneuron
+10      PeV-ArH PPP1R17 Glut 0.0671  HTHtu-HTHpo NTS-SEMA3C GABA 0.0610           HTH GABA
+```
+
+SPAR-MEN Glut (PAG Glut, PAG-IC-SC TFAP2D-MAF Glut)
+THM Glut (VLN Glut, MD-IMD-VL-MG-PO-PLi Glut)
+AMY Glut (BL Glut, La Glut)
+MB-THM GABA (THM-MB GABA, THM GABA)
+
+See where errors are concentrated:
+
+```{r}
+# > sort(diag(tbl_group) / sum(tbl_group)) %>% rev %>% head(30)
+# 
+#           Oligo OPALIN     STRd D2 Matrix MSN     STRd D1 Matrix MSN                DG Glut            Astro-TE NN 
+#            0.085574525            0.055506049            0.050045882            0.046593324            0.028317158 
+#              Microglia                    OPC               THM GABA            STRv D1 MSN          Oligo PLEKHG1 
+#            0.026959113            0.021529878            0.019223263            0.019074497            0.018373380 
+#  AMY-STR ITC-NUDAP MSN L5-6 IT CTX-PArCx Glut            Astro-NT NN            STRv D2 MSN               VIP GABA 
+#            0.015648452            0.015470227            0.013007481            0.012658396            0.012539088 
+#       Cla-En GNB4 Glut       L2-3 IT CTX Glut         LGmc-LGpc Glut                La Glut L4-5 IT CTX-PArCx Glut 
+#            0.012185584            0.012181165            0.011871849            0.011618504            0.010669935 
+#    STR D1D2 Hybrid MSN               PAG Glut  STRd D1 Striosome MSN   L6 CT CTX-PArCx Glut     STR SST-RSPO2 GABA 
+#            0.010566829            0.010509385            0.010216271            0.009970291            0.009927576 
+#               Pul Glut               CA3 Glut      CEN-SLEA-BST GABA  STRd D2 Striosome MSN          CA1-ProS Glut 
+#            0.009877496            0.009034978            0.007937642            0.007616542            0.007317537 
+```
+
+[but this is unfair because large groups, like the STR MSNs, stand out more than
+they otherwise would. it's better just to look at the performance metrics by
+Group]
+
+## (Using Confusion flow)
+
+flow being defined by number of cells times probability (so weighted by number
+of instances)
+
+but won't use this as final output because again highlighting Group sizes, when
+we really care more about Group-wise performance
+
+```{r}
+pred_accuracy_table_group %>% 
+    mutate(conf_flow = n_pred * p_alt1) %>% 
+    ggplot(aes(n_pred, conf_flow, label = prediction, color = Subcortex_Class_v4)) + 
+    geom_point() + 
+    scale_color_manual(values = palettes$Class) + 
+    ggrepel::geom_text_repel() + 
+    theme_md_classic()
+
+pred_accuracy_table_group %>% 
+    mutate(conf_flow = n_pred * p_alt) %>% 
+    ggplot(aes(precision, conf_flow, label = prediction, color = Subcortex_Class_v4)) + 
+    geom_point() + 
+    scale_color_manual(values = palettes$Class) + 
+    ggrepel::geom_text_repel() + 
+    theme_md_classic()
+
+
+# pred_accuracy_table_group %>% 
+#     mutate(conf_flow = n_pred * p_alt1) %>% 
+#     arrange(desc(conf_flow)) %>% 
+#     .[, c("prediction", "n_pred", "n_truth", "precision", "conf_flow")] %>% 
+#     head(10) %>% 
+#     print.data.frame
+
+#               prediction n_pred n_truth precision  conf_flow
+# 1          Oligo PLEKHG1  25970   13235    0.4803 13462.8480
+# 2            STRv D1 MSN  17181   14359    0.7537  3628.6272
+# 3            THM-MB GABA   6556    5836    0.6432  2042.1940
+# 4     STRd D2 Matrix MSN  40047   40140    0.9410  1577.8518
+# 5     STRd D1 Matrix MSN  36594   38627    0.9285  1218.5802
+# 6            STRv D2 MSN  10210    9478    0.8417  1147.6040
+# 7               THM GABA  14205   15288    0.9188  1032.7035
+# 8  STRd D1 Striosome MSN   7809    8564    0.8882   762.1584
+# 9           Oligo OPALIN  58952   71981    0.9855   760.4808
+# 10 STRd D2 Striosome MSN   6081    7178    0.8504   737.0172
+```
+
+I like this but ultimately still don't want to focus on Group sizes 
+(although it does show, for instance, plenty of "errors" in STR MSNs even
+though overall their accuracy scores are pretty good; small piece of big pie)
+
+```{r}
+pred_accuracy_table_group %>%
+    mutate(
+        conf_flow1 = n_pred * p_alt1,
+        hotspot_label = paste0(prediction, " \u2192 ", alt1)
+    ) %>%
+    ggplot(aes(precision, conf_flow1, color = Subcortex_Class_v4)) +
+    geom_point(aes(size = n_pred), alpha = 0.85) +
+    ggrepel::geom_text_repel(
+        data = \(x) dplyr::filter(x, conf_flow1 >= 100 | precision < 0.65),
+        aes(label = hotspot_label),
+        size = 3
+    ) +
+    scale_y_log10() +
+    scale_color_manual(values = palettes$Class) +
+    labs(
+        x = "Precision (P(truth = prediction | prediction))",
+        y = "Largest confusion flow (n_pred * p_alt1, log scale)",
+        size = "Predicted count"
+    ) +
+    theme_md_classic()
+```
+
+### (!) Precision vs. p_alt1 
+
+p_alt1 instead of confusion flow (de-emphasize cell counts).
+
+this might be better than the plots done below.
+
+```{r}
+pred_accuracy_table_group %>%
+    mutate(
+        # conf_flow1 = n_pred * p_alt1,
+        hotspot_label = paste0(prediction, " \u2192 ", alt1)
+    ) %>%
+    arrange(desc(n_pred)) %>% 
+    ggplot(aes(precision, p_alt1, color = Subcortex_Class_v4)) +
+    geom_point(aes(size = n_pred), shape=16) +
+    ggrepel::geom_text_repel(
+        data = \(x) dplyr::filter(x, p_alt1 >= 0.1 | precision < 0.65),
+        aes(label = hotspot_label),
+        size = 2, min.segment.length = 0
+    ) +
+    # scale_y_log10() +
+    scale_color_manual(values = palettes$Class) +
+    labs(
+        x = "Probability Prediction Correct (Precision)\nP(truth = prediction | prediction)",
+        y = "Probability of the Most Frequent Contaminant\nP(truth = contaminant | prediction)",
+        size = "Total Cells\nMapped to Group",
+        color = "Class"
+    ) +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_precision_vs_palt1_confusion_mapping.pdf"),
+    width=110, height=63, units = "mm"
+)
+```
+
+get rid of the size aesthetic
+
+```{r}
+pred_accuracy_table_group %>%
+    mutate(
+        # conf_flow1 = n_pred * p_alt1,
+        hotspot_label = paste0(prediction, " \u2192 ", alt1),
+        hotspot_label = ifelse(
+            p_alt1 >= 0.1 & precision < 0.65,
+            hotspot_label,
+            ""
+        )
+    ) %>% 
+    arrange(desc(n_pred)) %>% # not relevant but it's what was output
+    ggplot(aes(precision, p_alt1, color = Subcortex_Class_v4)) +
+    geom_point(shape=16) +
+    ggrepel::geom_text_repel(
+        aes(label = hotspot_label),
+        size = 2, min.segment.length = 0
+    ) +
+    scale_color_manual(values = palettes$Class) +
+    labs(
+        x = "Probability Prediction Correct (Precision)\nP(truth = prediction | prediction)",
+        y = "Probability of the Most Frequent Contaminant\nP(truth = contaminant | prediction)",
+        color = "Class"
+    ) +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_precision_vs_palt1_confusion_mapping2.pdf"),
+    width=110, height=63, units = "mm"
+)
+```
+
+
+```{r}
+# example, the worst
+# > filter(pred_accuracy_table_group, prediction == "Oligo PLEKHG1") %>% t 
+# 
+#                    [,1]           
+# prediction         "Oligo PLEKHG1"
+# n_pred             "25970"        
+# n_truth            "13235"        
+# precision          "0.4803"       
+# recall             "0.9425"       
+# f1                 "0.6363"       
+# p_alt              "0.5197"       
+# alt1               "Oligo OPALIN" 
+# p_alt1             "0.5184"       
+# alt2               "ImOligo"      
+# p_alt2             "0.0011"       
+# alt3               "Ependymal"    
+# p_alt3             "1e-04"        
+# Subcortex_Class_v4 "Nonneuron"   
+    ```
+
+### (skip) Alluvial plot
+
+“left = truth, right = prediction” alluvial where each truth group has total width = 1,
+
+```{r}
+library(tidyr)
+library(ggalluvial)
+
+make_truth_alluvial_df <- function(
+        tbl_group,
+        pred_accuracy_table_group,
+        n_worst = 25,
+        recall_max = NULL,
+        p_min = 0.05,
+        top_k = NULL,
+        include_self = TRUE,
+        other_label = "Other"
+) {
+    cm <- as.matrix(unclass(tbl_group))
+    storage.mode(cm) <- "numeric"
+    
+    # Column-normalize: P(pred | truth)
+    p_pred_given_truth <- sweep(cm, 2, pmax(colSums(cm), 1), "/")
+    
+    # truth-centered performance table
+    truth_scores <- pred_accuracy_table_group %>%
+        transmute(truth = prediction, recall = recall, n_truth = n_truth) %>%
+        filter(truth %in% colnames(p_pred_given_truth)) %>%
+        filter(!is.na(recall), n_truth > 0)
+    
+    truth_keep <- if (!is.null(recall_max)) {
+        truth_scores %>% filter(recall <= recall_max) %>% arrange(recall) %>% pull(truth)
+    } else {
+        truth_scores %>% arrange(recall) %>% slice_head(n = n_worst) %>% pull(truth)
+    }
+    
+    # Long format probs for selected truth groups
+    df <- as.data.frame(as.table(p_pred_given_truth[, truth_keep, drop = FALSE]), stringsAsFactors = FALSE)
+    colnames(df) <- c("pred", "truth", "p")
+    
+    # add class annotation (for fill, etc.)
+    df <- df %>%
+        left_join(
+            pred_accuracy_table_group %>% select(prediction, Subcortex_Class_v4),
+            by = c("truth" = "prediction")
+        )
+    
+    df2 <- df %>%
+        group_by(truth) %>%
+        mutate(
+            is_self = (pred == truth),
+            rank_p = dplyr::min_rank(dplyr::desc(p)),
+            topk_keep = if (is.null(top_k)) FALSE else (rank_p <= top_k),
+            keep =
+                (include_self & is_self) |
+                (!is_self & (p >= p_min)) |
+                (!is_self & topk_keep),
+            pred2 = ifelse(keep, pred, other_label)
+        ) %>%
+        group_by(truth, pred2, Subcortex_Class_v4) %>%
+        summarise(p = sum(p), .groups = "drop")
+    
+    # Order truth groups by recall (worst first)
+    truth_order <- truth_scores %>%
+        filter(truth %in% truth_keep) %>%
+        arrange(recall) %>%
+        pull(truth)
+    
+    df2 %>%
+        mutate(
+            truth = factor(truth, levels = truth_order),
+            pred2 = factor(pred2, levels = c(setdiff(unique(pred2), other_label), other_label))
+        )
+}
+```
+
+```{r}
+df_alluv <- make_truth_alluvial_df(
+    tbl_group = tbl_group,
+    pred_accuracy_table_group = pred_accuracy_table_group,
+    n_worst = 25,
+    p_min = 0.05,
+    include_self = TRUE,
+    other_label = "Other"
+)
+```
+
+
+```{r}
+df_alluv %>% 
+    filter(p>0.1) %>% 
+    ggplot(aes(axis1 = truth, axis2 = pred2, y = p)) +
+    geom_alluvium(aes(fill = Subcortex_Class_v4), alpha = 0.85, width = 0.25) +
+    geom_stratum(width = 0.25, color = "black", linewidth = 0.2, fill = "white") +
+    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 2.6) +
+    scale_fill_manual(values = palettes$Class) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    labs(x = NULL, y = "Fraction within truth group", fill = "Class") +
+    theme_md_classic() + 
+    theme(
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank()
+    )
+```
+
+forget that it's terrible
+
+```{r}
+pred_accuracy_table %>% filter(prediction %in% c("cluster_807", "cluster_808", "cluster_794"))
+```
+
+```{r}
+pred_accuracy_table %>% filter(prediction %in% c("cluster_681", "cluster_684"))
+```
+
+## [skip] (Use graphs) 
+
+again focus here was on confusion flow (weighted by number of cells)
+
+### Build edges
+
+```{r}
+confusion_edges <- function(tbl) {
+    cm <- as.matrix(unclass(tbl))
+    storage.mode(cm) <- "numeric"
+    
+    pred_labels  <- rownames(cm)
+    truth_labels <- colnames(cm)
+    n_pred <- rowSums(cm)
+    
+    # long format
+    edges <- as.data.frame(as.table(cm), stringsAsFactors = FALSE)
+    colnames(edges) <- c("pred", "truth", "n")
+    
+    # add row-normalized probability P(truth | pred)
+    edges <- edges %>%
+        mutate(
+            n_pred = n_pred[match(pred, pred_labels)],
+            p_pred_to_truth = ifelse(n_pred > 0, n / n_pred, NA_real_)
+        ) %>%
+        filter(pred != truth, n > 0)
+    
+    edges
+}
+```
+
+```{r}
+tbl_group %>% 
+    confusion_edges %>% 
+    filter(n >= 50, p_pred_to_truth >= 0.05) %>%  # tune thresholds
+    arrange(desc(n)) ->
+    edges_group
+```
+
+```{r}
+# pred_accuracy_table_group %>% 
+#     filter(prediction %in% c("Oligo PLEKHG1", "Oligo OPALIN")) %>% 
+#     .[, 1:9] %>% 
+#     print.data.frame
+# 
+#      prediction n_pred n_truth precision recall     f1  p_alt          alt1 p_alt1
+# 1  Oligo OPALIN  58952   71981    0.9855 0.8071 0.8874 0.0145 Oligo PLEKHG1 0.0129
+# 2 Oligo PLEKHG1  25970   13235    0.4803 0.9425 0.6363 0.5197  Oligo OPALIN 0.5184
+```
+
+```{r}
+# tbl_group %>% 
+#     confusion_edges %>% 
+#     filter(pred %in% c("Oligo OPALIN", "Oligo PLEKHG1"), truth %in% c("Oligo OPALIN", "Oligo PLEKHG1")) %>% 
+#     print.data.frame
+# 
+#            pred         truth     n n_pred p_pred_to_truth
+# 1 Oligo PLEKHG1  Oligo OPALIN 13463  25970      0.51840585
+# 2  Oligo OPALIN Oligo PLEKHG1   759  58952      0.01287488
+```
+
+Ok all this info is already in the prediction table (esp. p_alt1 values)
+
+### (Plot flows)
+
+```{r}
+library(grid)
+library(tibble)
+
+plot_confusion_arrows <- function(edges, metrics_tbl, top_n = 20) {
+    ed <- edges %>%
+        # arrange(desc(n)) %>%
+        arrange(desc(p_pred_to_truth)) %>% 
+        slice_head(n = top_n)
+    
+    labels_used <- union(ed$pred, ed$truth)
+    
+    node_order <- metrics_tbl %>%
+        filter(prediction %in% labels_used) %>%
+        mutate(conf_burden = n_pred * (1 - precision)) %>%
+        arrange(desc(conf_burden)) %>%
+        pull(prediction) %>%
+        unique()
+    
+    # Pre-name columns to avoid x/y collisions
+    nodes_left <- tibble(
+        pred = node_order,
+        x = 0,
+        y = rev(seq_along(node_order))
+    ) %>% 
+        left_join(
+            metrics_tbl %>% select(prediction, Subcortex_Class_v4),
+            by = c("pred" = "prediction")
+        )
+    
+    nodes_right <- tibble(
+        truth = node_order,
+        xend = 1,
+        yend = rev(seq_along(node_order))
+    ) %>% 
+        left_join(
+            metrics_tbl %>% select(prediction, Subcortex_Class_v4),
+            by = c("truth" = "prediction")
+        )
+    
+    ed2 <- ed %>%
+        left_join(nodes_left, by = "pred") %>%
+        left_join(nodes_right, by = "truth") %>%
+        left_join(
+            metrics_tbl %>% select(prediction, Subcortex_Class_v4),
+            by = c("pred" = "prediction")
+        )
+    
+    ggplot() +
+        geom_curve(
+            data = ed2,
+            aes(
+                x = x, y = y, xend = xend, yend = yend,
+                # linewidth = n, 
+                linewidth = p_pred_to_truth, 
+                # alpha = p_pred_to_truth, 
+                alpha = n, 
+                color = Subcortex_Class_v4
+            ),
+            curvature = 0.15,
+            arrow = arrow(length = unit(2.2, "mm"), type = "closed")
+        ) +
+        geom_point(data = nodes_left, aes(x, y, color=Subcortex_Class_v4), size = 2) +
+        geom_point(data = nodes_right, aes(xend, yend, color=Subcortex_Class_v4), size = 2) +
+        geom_text(data = nodes_left, aes(x, y, label = pred), hjust = 1.05, size = 3) +
+        geom_text(data = nodes_right, aes(xend, yend, label = truth), hjust = -0.05, size = 3) +
+        scale_x_continuous(
+            breaks = c(0, 1),
+            labels = c("Predicted", "True"),
+            expand = c(0.15, 0.15)
+        ) +
+        # scale_size_continuous(name = "Confused cells") +
+        scale_size_continuous(name = "P(truth | pred)") +
+        # scale_alpha_continuous(name = "P(truth | pred)") +
+        scale_alpha_continuous(name = "Confused cells") +
+        scale_color_manual(values = palettes$Class) +
+        coord_cartesian(clip = "off") +
+        theme_md_classic() +
+        theme(
+            legend.position = "right",
+            plot.margin = margin(10, 120, 10, 120),
+            axis.line = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title = element_blank(),
+            axis.ticks = element_blank()
+        )
+}
+```
+
+```{r, fig.width=12, fig.height=6}
+plot_confusion_arrows(edges_group, pred_accuracy_table_group)
+```
+
+not terrible but not great
+
+### (Heatmap)
+
+```{r}
+library(tidyr)
+
+plot_hotspot_confusion_heatmap <- function(tbl, metrics_tbl, top_rows = 12, p_label_min = 0.05) {
+    cm <- as.matrix(unclass(tbl))
+    storage.mode(cm) <- "numeric"
+    
+    # Row-normalized: P(truth | pred)
+    post <- sweep(cm, 1, pmax(rowSums(cm), 1), "/")
+    
+    # Pick hotspot predicted labels
+    hot_rows <- metrics_tbl %>%
+        mutate(conf_flow1 = n_pred * p_alt1) %>%
+        arrange(desc(conf_flow1)) %>%
+        slice_head(n = top_rows) %>%
+        pull(prediction)
+    
+    # Include likely alternative truths
+    hot_cols <- metrics_tbl %>%
+        filter(prediction %in% hot_rows) %>%
+        select(alt1, alt2, alt3) %>%
+        unlist(use.names = FALSE) %>%
+        unique() %>%
+        na.omit()
+    
+    show_cols <- unique(c(hot_rows, hot_cols))
+    show_rows <- hot_rows
+    
+    # Subset matrices
+    post_sub <- post[show_rows, show_cols, drop = FALSE]
+    cm_sub   <- cm[show_rows, show_cols, drop = FALSE]
+    
+    # Long format
+    df_p <- as.data.frame(as.table(post_sub), stringsAsFactors = FALSE)
+    colnames(df_p) <- c("pred", "truth", "p")
+    
+    df_n <- as.data.frame(as.table(cm_sub), stringsAsFactors = FALSE)
+    colnames(df_n) <- c("pred", "truth", "n")
+    
+    df <- df_p %>%
+        left_join(df_n, by = c("pred", "truth")) %>%
+        left_join(metrics_tbl %>% select(prediction, Subcortex_Class_v4),
+                  by = c("pred" = "prediction")) %>%
+        mutate(
+            pred = factor(pred, levels = rev(show_rows)),
+            truth = factor(truth, levels = show_cols),
+            label = ifelse(p >= p_label_min, sprintf("%.2f\n(n=%d)", p, n), "")
+        )
+    
+    ggplot(df, aes(truth, pred, fill = p)) +
+        geom_tile(color = "white", linewidth = 0.2) +
+        geom_text(aes(label = label), size = 2.5, lineheight = 0.9) +
+        scale_fill_viridis_c(name = "P(truth | pred)", limits = c(0, 1)) +
+        labs(x = "True group", y = "Predicted group") +
+        theme_minimal(base_size = 10) +
+        theme(
+            axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid = element_blank()
+        )
+}
+```
+
+```{r}
+plot_hotspot_confusion_heatmap(tbl_group, pred_accuracy_table_group, top_rows = 12)
+```
+
+probably too big and not as efficient
+
+### Pairwise Confusion sets
+
+Groups that are confused with one another (can be mutual or not, will gloss
+over the directionality). 
+
+#### (Reciprocal confusion bars by no. cells)
+
+```{r}
+pair_confusions <- function(edges) {
+    edges %>%
+        mutate(
+            a = pmin(pred, truth),
+            b = pmax(pred, truth)
+        ) %>%
+        group_by(a, b) %>%
+        summarise(
+            n_pair = sum(n),
+            .groups = "drop"
+        ) %>%
+        arrange(desc(n_pair))
+}
+
+pairs_group <- pair_confusions(edges_group)
+
+pairs_group %>%
+    head(15) %>% 
+    mutate(pair = paste0(a, " \u2194 ", b)) %>%
+    ggplot(aes(x = reorder(pair, n_pair), y = n_pair, fill = n_pair)) +
+    geom_col(color="black", linewidth=0.25) +
+    scale_fill_viridis_c(
+        trans="log10", 
+        breaks=c(100, 1e3, 1e4), 
+        limits=c(80,NA)
+        # guide = guide_colorbar(draw.llim = FALSE)
+    ) + 
+    scale_y_continuous(limits = c(0, 1.5e4), expand=c(0,0)) + 
+    coord_flip() +
+    labs(x = NULL, y = "Total confused cells (A↔B)", title = "Multiome RNA Self-Mapping\nGroup-Level Confusion Cases") +
+    theme_md_classic() + 
+    theme(legend.position = "none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "barplot_group_mapping_confusion.pdf"),
+    width=90, height=55, units = "mm"
+)
+```
+
+so that's not quite right, focusing so much on the number of cells
+
+#### Reciprocal confusion (normalized)
+
+Want to normalize the confusion (so make probabilities or fractions)
+
+```{r}
+pair_confusions_from_tbl <- function(tbl) {
+    cm <- as.matrix(unclass(tbl))
+    storage.mode(cm) <- "numeric"
+    
+    pred_labels  <- rownames(cm)
+    truth_labels <- colnames(cm)
+    
+    # supports by truth label (denominator side)
+    truth_support <- colSums(cm)
+    truth_df <- tibble(
+        label = names(truth_support),
+        n_truth = as.numeric(truth_support)
+    )
+    
+    # long off-diagonal confusion edges
+    edges <- as.data.frame(as.table(cm), stringsAsFactors = FALSE)
+    colnames(edges) <- c("pred", "truth", "n")
+    edges <- edges %>%
+        filter(pred != truth, n > 0)
+    
+    # collapse to unordered pairs
+    pairs <- edges %>%
+        mutate(
+            a = pmin(pred, truth),
+            b = pmax(pred, truth),
+            # direction-specific counts within the unordered pair
+            n_a_to_b = ifelse(pred == a & truth == b, n, 0),
+            n_b_to_a = ifelse(pred == b & truth == a, n, 0)
+        ) %>%
+        group_by(a, b) %>%
+        summarise(
+            n_a_to_b = sum(n_a_to_b),
+            n_b_to_a = sum(n_b_to_a),
+            n_pair   = n_a_to_b + n_b_to_a,
+            .groups = "drop"
+        ) %>%
+        left_join(truth_df %>% rename(a = label, n_truth_a = n_truth), by = "a") %>%
+        left_join(truth_df %>% rename(b = label, n_truth_b = n_truth), by = "b") %>%
+        mutate(
+            truth_pair = n_truth_a + n_truth_b,
+            pair_swap_frac = ifelse(truth_pair > 0, n_pair / truth_pair, NA_real_),
+            frac_a_to_b = ifelse(n_truth_b > 0, n_a_to_b / n_truth_b, NA_real_), # truth=B miscalled as A
+            frac_b_to_a = ifelse(n_truth_a > 0, n_b_to_a / n_truth_a, NA_real_), # truth=A miscalled as B
+            asymmetry = ifelse(n_pair > 0, abs(n_a_to_b - n_b_to_a) / n_pair, NA_real_)
+        ) %>%
+        arrange(desc(n_pair))
+    
+    pairs
+}
+
+pairs_group <- pair_confusions_from_tbl(tbl_group)
+```
+
+```{r}
+
+# library(scales)
+
+pairs_group %>%
+    filter(n_pair >= 50, truth_pair >= 500) %>%  # important: avoid tiny-denominator artifacts
+    arrange(desc(pair_swap_frac)) %>%
+    slice_head(n = 15) %>%
+    mutate(
+        # pair = paste0(a, " \u2194 ", b),
+        pair = paste0(a, " ↔ ", b),
+        pair = reorder(pair, pair_swap_frac)
+    ) %>%
+    ggplot(aes(x = pair, y = pair_swap_frac, fill = n_pair)) +
+    geom_col(color = "black", linewidth = 0.25) +
+    geom_text(
+        aes(label = paste0("n=", scales::comma(n_pair))),
+        hjust = -0.1, size = 2
+    ) +
+    coord_flip(clip = "off") +
+    scale_y_continuous(
+        labels = scales::percent_format(accuracy = 1),
+        # limits = c(0, 0.2), 
+        # expand=c(0,0)
+        expand = expansion(mult = c(0, 0.05))
+    ) +
+    # scale_fill_viridis_c(trans = "log10", breaks = c(100, 1e3, 1e4)) +
+    scale_fill_viridis_c(trans = "log10") +
+    labs(
+        x = NULL,
+        y = "Pairwise Swap Fraction\n(A→B + B→A) / (truth A + truth B)",
+        title = "Multiome RNA Self-Mapping\nGroup-level Pairwise Confusion Rate",
+        fill = "Confused\nCells"
+    ) +
+    theme_md_classic() + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "barplot_group_mapping_confusion_normalized.pdf"),
+    width=120, height=55, units = "mm"
+)
+```
+
+i like that 
+
+##### (!) Impact vs. Severity
+
+this again brings out the cell counts as being significant.
+i like this but we decided against focusing on it
+
+```{r}
+pairs_group %>%
+    filter(n_pair >= 30, truth_pair >= 300) %>%
+    mutate(pair = paste0(a, " \u2194 ", b)) %>%
+    ggplot(aes(pair_swap_frac, n_pair)) +
+    geom_point(
+        aes(size = truth_pair, color = n_pair), 
+        alpha = 0.9,
+        shape=16
+    ) +
+    ggrepel::geom_text_repel(
+        data = \(x) dplyr::filter(x, n_pair >= 300 | pair_swap_frac >= 0.08),
+        aes(label = pair),
+        size = 2
+    ) +
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_log10(labels = scales::comma, breaks=c(100,1e3,1e4)) +
+    scale_color_viridis_c(trans = "log10", labels = scales::comma) +
+    labs(
+        x = "Pairwise Swap Fraction",
+        y = "Total Confused Cells (A↔B)",
+        size = "Actual Cells\nin A+B",
+        color = "Confused\nCells",
+        # title = "Group-level confusion hotspots: severity vs impact"
+        title = "Multiome RNA Self-Mapping\nGroup-level Confusion Hotspots",
+    ) +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_frac_vs_cells_group_pairwise_mapping_confusion.pdf"),
+    width=100, height=65, units = "mm"
+)
+```
+
+Try to optimize labelling, colorbar size
+
+```{r}
+# thanks gpt for going nuts on plot code
+
+# library(dplyr)
+# library(ggplot2)
+# library(scales)
+# library(ggrepel)
+# library(tibble)
+# library(grid)
+
+# ---- choose labels you *must* include (exact group names) ----
+must_label_pairs <- tibble::tribble(
+    ~a,                 ~b,
+    "Oligo OPALIN",      "Oligo PLEKHG1",
+    "STRd D1 Matrix MSN","STRv D1 MSN",
+    "THM GABA",          "THM-MB GABA"
+)
+
+canon_pair <- function(a, b) tibble(a0 = pmin(a, b), b0 = pmax(a, b))
+must_pairs_canon <- canon_pair(must_label_pairs$a, must_label_pairs$b) %>%
+    mutate(must_label = TRUE)
+
+# ---- label cutoffs ----
+x_cut  <- 0.075   # 8%
+y_cut  <- 1000
+
+# “soft” buffer for near-edge cases (optional)
+x_soft <- 0.075
+y_soft <- 800
+
+pairs_group %>%
+    filter(n_pair >= 30, truth_pair >= 300) %>%
+    mutate(pair = paste0(a, " \u2194 ", b)) %>%
+    left_join(must_pairs_canon, by = c("a" = "a0", "b" = "b0")) %>%
+    mutate(must_label = ifelse(is.na(must_label), FALSE, must_label)) %>%
+    # ranks used only for picking a *few* near-threshold points
+    mutate(
+        rank_swap  = dense_rank(desc(pair_swap_frac)),
+        rank_npair = dense_rank(desc(n_pair))
+    ) %>%
+    mutate(
+        label_me =
+            must_label |
+            (n_pair >= y_cut) |
+            (pair_swap_frac >= x_cut) |
+            # near-threshold “edge cases”: only allow a couple by rank
+            ((n_pair >= y_soft | pair_swap_frac >= x_soft) & (rank_swap <= 2 | rank_npair <= 2))
+    ) %>%
+    ggplot(aes(pair_swap_frac, n_pair)) +
+    geom_point(
+        aes(size = truth_pair, color = n_pair),
+        alpha = 0.9, shape = 16
+    ) +
+    ggrepel::geom_text_repel(
+        data = \(x) dplyr::filter(x, label_me),
+        aes(label = pair),
+        size = 2,
+        min.segment.length = 0,     # always draw segments
+        segment.alpha = 0.9,
+        segment.size = 0.25,
+        box.padding = 0.25,
+        point.padding = 0.15,
+        max.overlaps = Inf
+    ) +
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_log10(labels = scales::comma, breaks = c(100, 1e3, 1e4)) +
+    scale_color_viridis_c(
+        trans = "log10",
+        labels = scales::comma,
+        guide = guide_colorbar(
+            # ~30% smaller colorbar
+            barheight = unit(0.2, "npc"),
+            barwidth  = unit(0.02, "npc")
+        )
+    ) +
+    labs(
+        x = "Pairwise Swap Fraction",
+        y = "Total Confused Cells (A↔B)",
+        size = "Actual Cells\nin A+B",
+        color = "Confused\nCells",
+        title = "Multiome RNA Self-Mapping\nGroup-level Confusion Hotspots"
+    ) +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "scatter_frac_vs_cells_group_pairwise_mapping_confusion2.pdf"),
+    width=100, height=65, units = "mm"
+)
+```
+
+#### (!) What fraction of group misassignments explained there?
+
+Those (labelled) swap pairs explain what fraction of group misassignments?
+
+```{r}
+# library(dplyr)
+# library(tibble)
+
+cm <- as.matrix(unclass(tbl_group))
+storage.mode(cm) <- "numeric"
+
+# Total number of wrong assignments at group level
+N_wrong_total <- sum(cm) - sum(diag(cm))   # off-diagonal sum
+
+# 2) Recreate pairs_group (must include n_pair, truth_pair, pair_swap_frac, etc.)
+# (Assumes you already have pair_confusions_from_tbl() from earlier; if not, tell me and I’ll paste it)
+pairs_group <- pair_confusions_from_tbl(tbl_group)
+
+# 3) Recreate label selection logic (exactly what you used in the plot)
+must_label_pairs <- tibble::tribble(
+    ~a,                  ~b,
+    "Oligo OPALIN",       "Oligo PLEKHG1",
+    "STRd D1 Matrix MSN", "STRv D1 MSN",
+    "THM GABA",           "THM-MB GABA",
+    "STRd D2 Matrix MSN", "STRd D2 Striosome MSN",
+    "STRd D2 Matrix MSN", "STRv D2 MSN",
+    "STRd D1 Matrix MSN", "STRd D1 Striosome MSN",
+    "L2-3 IT CTX Glut",   "L4-5 IT CTX-PArCx Glut",
+    "MB-THM GABA",        "THM-MB GABA",
+    "CA2-CA3-IG Glut",    "CA3 Glut",
+    "VLN Glut",           "VP-MG Glut",
+    "STR TAC3-PLPP4 GABA", "STR-BF TAC3-PLPP4-LHX8 GABA",
+    "LSX PRDM12-NTS GABA", "LSX PRDM12-SLIT2 GABA"
+)
+
+canon_pair <- function(a, b) tibble(a0 = pmin(a, b), b0 = pmax(a, b))
+must_pairs_canon <- canon_pair(must_label_pairs$a, must_label_pairs$b) %>%
+    mutate(must_label = TRUE)
+
+pairs_labeled <- pairs_group %>%
+    left_join(must_pairs_canon, by = c("a" = "a0", "b" = "b0")) %>%
+    mutate(must_label = ifelse(is.na(must_label), FALSE, must_label)) %>%
+    mutate(
+        rank_swap  = dense_rank(desc(pair_swap_frac)),
+        rank_npair = dense_rank(desc(n_pair))
+    ) %>%
+    mutate(
+        label_me = must_label
+    ) %>%
+    filter(label_me) %>%
+    select(a, b, n_pair)
+
+# 4) Compute how many wrong assignments are in those labeled pairs
+# Since a,b are canonical with a<b, the pair confusion count in the full matrix is:
+# cm[a,b] + cm[b,a]
+N_wrong_labeled <- sum(mapply(function(a, b) cm[a, b] + cm[b, a], pairs_labeled$a, pairs_labeled$b))
+
+frac_explained <- N_wrong_labeled / N_wrong_total
+
+list(
+    N_wrong_total   = N_wrong_total,
+    N_wrong_labeled = N_wrong_labeled,
+    frac_explained  = frac_explained,
+    n_labeled_pairs = nrow(pairs_labeled)
+)
+
+# $N_wrong_total
+# [1] 66582
+# 
+# $N_wrong_labeled
+# [1] 31551
+# 
+# $frac_explained
+# [1] 0.4738668
+# 
+# $n_labeled_pairs
+# [1] 12
+```
+
+So those labelled swaps explain ~47% of mis-assigned groups in self-mapping.
+
+```{r}
+# just checking again, still see same >90% group accuracy
+# > sum(diag(tbl_group)) / sum(tbl_group)
+# [1] 0.9019291
+```
+
+
+### (!) Compare to pairwise dist/similarity instead
+
+So de-emphasize number of cells, instead get pairwise swap rate & the 
+siilarity...
+
+didn't get to it
+
+# (!) Cluster-level performance by group
+
+Idea is to highlight the best and worst groups by how resolvable their
+clusters are internally...
+
+```{r}
+pred_accuracy_table %>% 
+    split(., .$Subcortex_Group_v4) %>% 
+    lapply(function(x) data.frame(
+        group = unique(x$Subcortex_Group_v4),
+        class = unique(x$Subcortex_Class_v4),
+        precision = mean(x$precision), 
+        recall = mean(x$recall), 
+        f1 = mean(x$f1)
+    )) %>% 
+    bind_rows %>% # 212 rows
+    arrange(precision) %>% 
+    mutate(
+        group_label = ifelse(
+            rank(precision) < 9 | rank(precision) > 204,
+            group,
+            ""
+        )
+    ) %>% 
+    ggplot(aes(rank(precision), precision, label=group_label, color=class)) + 
+    geom_point(size=0.5, shape=16) + 
+    ggrepel::geom_text_repel(
+        size=2, min.segment.length=0, max.overlaps=Inf, family="ArialMT"
+    ) + 
+    scale_color_manual(values = palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nCluster Resolvability by Group",
+        x = "Group Rank",
+        y = "Mean Cluster-Level Precision"
+    ) + 
+    theme_md_classic() 
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "rankscatter_avg_cluster_precision_by_group.pdf"),
+    width=100, height=65, units = "mm"
+)
+```
+
+same w/ f1
+
+```{r}
+pred_accuracy_table %>% 
+    split(., .$Subcortex_Group_v4) %>% 
+    lapply(function(x) data.frame(
+        group = unique(x$Subcortex_Group_v4),
+        class = unique(x$Subcortex_Class_v4),
+        precision = mean(x$precision), 
+        recall = mean(x$recall), 
+        f1 = mean(x$f1)
+    )) %>% 
+    bind_rows %>% # 212 rows
+    arrange(precision) %>% 
+    mutate(
+        group_label = ifelse(
+            rank(f1) < 9 | rank(f1) > 204,
+            group,
+            ""
+        )
+    ) %>% 
+    ggplot(aes(rank(f1), f1, label=group_label, color=class)) + 
+    geom_point(size=0.5, shape=16) + 
+    ggrepel::geom_text_repel(
+        size=2, min.segment.length=0, max.overlaps=Inf, family="ArialMT"
+    ) + 
+    scale_color_manual(values = palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nCluster Resolvability by Group",
+        x = "Group Rank",
+        y = "Mean Cluster-Level F1"
+    ) + 
+    theme_md_classic() -> p1
+p1
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "rankscatter_avg_cluster_f1_by_group.pdf"),
+    width=70, height=50, units = "mm"
+)
+```
+
+## Do for just Group F1 as well
+
+Do the rank vs. F1 score, and idea to have this side-by-side with the
+avg. cluster F1 for group, and really tall with lots of labels
+
+[remaking same plot as above, just with modified label counts]:
+```{r}
+pred_accuracy_table %>% 
+    split(., .$Subcortex_Group_v4) %>% 
+    lapply(function(x) data.frame(
+        group = unique(x$Subcortex_Group_v4),
+        class = unique(x$Subcortex_Class_v4),
+        precision = mean(x$precision), 
+        recall = mean(x$recall), 
+        f1 = mean(x$f1)
+    )) %>% 
+    bind_rows %>% # 212 rows
+    arrange(precision) %>% 
+    mutate(
+        group_label = ifelse(
+            rank(f1) < 20 | rank(f1) > 195,
+            group,
+            ""
+        )
+    ) %>% 
+    ggplot(aes(rank(f1), f1, label=group_label, color=class)) + 
+    geom_point(size=0.5, shape=16) + 
+    ggrepel::geom_text_repel(
+        size=2, min.segment.length=0, max.overlaps=Inf, family="ArialMT"
+    ) + 
+    scale_color_manual(values = palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nCluster Resolvability by Group",
+        x = "Group Rank",
+        y = "Mean Cluster-Level F1"
+    ) + 
+    theme_md_classic() -> p1
+p1
+```
+
+```{r}
+pred_accuracy_table_group %>% 
+    arrange(precision) %>% 
+    mutate(
+        group_label = ifelse(
+            # rank(f1) < 9 | rank(f1) > 204,
+            rank(f1) < 20,
+            prediction,
+            ""
+        )
+    ) %>% 
+    ggplot(aes(rank(f1), f1, label=group_label, color=Subcortex_Class_v4)) + 
+    geom_point(size=0.5, shape=16) + 
+    ggrepel::geom_text_repel(
+        size=2, min.segment.length=0, max.overlaps=Inf, family="ArialMT"
+    ) + 
+    scale_color_manual(values = palettes$Class) + 
+    labs(
+        title = "Multiome RNA Self-Mapping\nGroup Resolvability",
+        x = "Group Rank",
+        y = "Group-Level F1"
+    ) + 
+    theme_md_classic() -> p2
+p2
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "rankscatter_group_f1_and_avg_cluster_f1_by_group.pdf"),
+    p2 + p1 + plot_layout(guides="collect"),
+    width=130, height=125, units = "mm"
+)
+```
+
+
+## By group stats
+
+What's the median group cluster resolvability?
+
+```{r}
+pred_accuracy_table %>% 
+    split(., .$Subcortex_Group_v4) %>% 
+    lapply(function(x) data.frame(
+        group = unique(x$Subcortex_Group_v4),
+        class = unique(x$Subcortex_Class_v4),
+        precision = mean(x$precision), 
+        recall = mean(x$recall), 
+        f1 = mean(x$f1)
+    )) %>% 
+    bind_rows %>% 
+    (function(x) {
+        summary(x$precision)
+    })
+ #   Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+ # 0.1914  0.5721  0.6473  0.6667  0.7555  1.0000 
+```
+
+
+```{r}
+# pred_accuracy_table$precision %>% mean
+# [1] 0.6128125
+# {diag(tbl_clust) / rowSums(tbl_clust)} %>% mean 
+# [1] 0.6128123
+# 
+# pred_accuracy_table$recall %>% mean
+# [1] 0.7067895
+# {diag(tbl_clust) / colSums(tbl_clust)} %>% mean
+# [1] 0.7067894
+# 
+# sum(diag(tbl_clust)) / sum(tbl_clust)
+# [1] 0.6011515
+```
+
+
+```{r}
+split(rownames(obs), obs$Subcortex_Group_v4) %>% 
+    lapply(function(clusts) tbl_clust)
+```
+
+# Cluster donor composition vs self-mapping
+
+Does donor composition affect self-mapping performance?
+
+For each cluster, calculate Shannon entropy, and normalize to: 
+0 for single-donor cluster
+1 for perfectly even 4 donor mixing
+
+(the raw shannon entropy will max at log(4)).
+
+```{r}
+donor_entropy <- donor_counts %>%
+    group_by(Cluster_v4) %>%
+    summarize(
+        total_cells = sum(n_cell),
+        n_donors_observed = sum(n_cell > 0),
+        entropy = {
+            p <- n_cell / sum(n_cell)
+            -sum(p[p > 0] * log(p[p > 0]))
+        },
+        entropy_norm = entropy / log(4),
+        # also normalize by number of donors (so if 2 donors, 1 if 50/50)
+        entropy_obs_norm = ifelse(
+            n_donors_observed > 1,
+            entropy / log(n_donors_observed),
+            0
+        ),
+        max_donor_frac = max(n_cell / sum(n_cell)),
+        .groups = "drop"
+    )
+
+donor_entropy
+```
+
+```{r}
+donor_entropy %>% 
+    ggplot(aes(rank(entropy_norm), entropy_norm)) + 
+    geom_line() + 
+    theme_md_classic()
+
+# only maxes at 1 if 4 donors
+pred_accuracy_table %>% 
+    left_join(donor_entropy, by = join_by("prediction" == "Cluster_v4")) %>% 
+    ggplot(
+        aes(entropy_norm, f1)
+    ) + 
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    ggpubr::stat_regline_equation(label.y=0.1) + 
+    ggpubr::stat_cor(label.y=0.05) + 
+    labs(
+        x = "Donor Entropy for Cluster",
+        y = "Cluster F1 Score",
+        title = "Self-Mapping Performance vs. Donor Representation"
+    ) + 
+    theme_md_classic()
+
+# entropy scaled by number of donors (so if 2 donors, entropy 1 if 50/50)
+pred_accuracy_table %>% 
+    left_join(donor_entropy, by = join_by("prediction" == "Cluster_v4")) %>% 
+    ggplot(
+        aes(entropy_obs_norm, f1)
+    ) + 
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    ggpubr::stat_regline_equation(label.y=0.1) + 
+    ggpubr::stat_cor(label.y=0.05) + 
+    labs(
+        x = "Donor Entropy for Cluster",
+        y = "Cluster F1 Score",
+        title = "Self-Mapping Performance vs. Donor Representation"
+    ) + 
+    theme_md_classic()
+```
+
+But should break this down by number of donors
+
+```{r}
+pred_accuracy_table %>% 
+    left_join(donor_entropy, by = join_by("prediction" == "Cluster_v4")) %>% 
+    # filter(n_donors_observed == 4) %>% 
+    split(., .$n_donors_observed) %>% 
+    .[2:4] %>% 
+    Map(function(x, nm) {
+        ggplot(
+            x, aes(entropy_obs_norm, f1)
+        ) + 
+            geom_point(size=0.5) + 
+            geom_smooth(method = "lm") +
+            ggpubr::stat_regline_equation(label.y=0.1) + 
+            ggpubr::stat_cor(label.y=0.05) + 
+            labs(
+                x = "Donor Entropy for Cluster",
+                y = "Cluster F1 Score",
+                title = paste0(
+                    # "Self-Mapping Performance vs. Donor Representation:\n ",
+                    nm, " Donor Clusters"
+                )
+            ) + 
+            theme_md_classic()
+    }, ., names(.)) %>% 
+    unname %>% 
+    do.call(wrap_plots, .) -> p2
+p2
+```
+
+```{r}
+pred_accuracy_table %>% 
+    left_join(donor_entropy, by = join_by("prediction" == "Cluster_v4")) %>% 
+    ggplot(
+        aes(as.factor(n_donors_observed), f1)
+    ) + 
+    geom_boxplot() + 
+    # ggpubr::stat_cor(aes(n_donors_observed, f1)) +  # p=2.4e-6
+    # ggpubr::stat_regline_equation(aes(n_donors_observed, f1)) +  # y=-0.022x+0.7
+    labs(
+        x = "Donors in Cluster",
+        y = "Cluster F1 Score"#,
+        # title = "Self-Mapping Performance vs. Donor Representation"
+    ) + 
+    theme_md_classic() -> p1
+p1
+```
+
+so a 2.2% reduction in mean F1 for each additional donor
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "donor_representation_vs_mapping_performance.pdf"),
+    p1 + p2 + plot_layout(widths=c(1, 8)),
+    width=120, height=55, units = "mm"
+)
+```
+
+
+
+
+# Neurons vs. non-neurons (re: reviewer)
+
+I guess first point is distinguished neuron from non-neuron is not being
+scored for accuracy and thus doesn't affect any reported performance metric.
+
+But then look at performance of clusters/groups separated by neurons and glia.
+
+Wait this is basically done already (boxplot group f1 score by class)
+
+# Check cluster pairs with low DEG differentiability
+
+Did the panel DEG analysis, finding pairs of clusters by distance (knn=30 for
+each cluster plus bottom 5% of clusters by pairwise distance), and then i output
+all cluster pairs with <10 DEGs between them. Will evaluate how those clusters
+self-map vs. other clusters.
+
+## Paths/import
+
+```{r}
+pdir_bdegs <- file.path(pdir, "panel_pairwise_binary_deg/results")
+bdeg_le10 <- read.delim(file.path(pdir_bdegs, "pairs_deg_le10.tsv"))
+```
+
+## (Quick check for number of spatial DEGs?)
+
+it's only for pairs with <10 DEGs betwen them
+
+```{r}
+nrow(bdeg_le10)
+```
+
+
+```{r}
+bdeg_le10$top_genes_qdiff %>% 
+    # always 10 genes
+    lapply({
+        . %>% 
+            strsplit(",") %>% 
+            unlist %>% 
+            sub(":.*", "", .)
+    }) %>% 
+    unlist %>% 
+    unique %>% 
+    length
+```
+
+244 genes show up in the top 10 distinguishing genes in these comparisons
+
+## Get min DEG for each cluster
+
+the default results (for n_sep_deg in table) were:
+sep-q1 0.2
+sep-qdiff 0.5
+fdr < 0.05
+
+Right now I have pairs, but what I need is to find, for any cluster in that 
+table, the min DEGs it has with any other cluster.
+
+```{r}
+rbind(
+    select(bdeg_le10, cluster_i, n_sep_deg) %>% rename(cluster = cluster_i),
+    select(bdeg_le10, cluster_j, n_sep_deg) %>% rename(cluster = cluster_j)
+) %>% 
+    arrange(cluster, n_sep_deg) %>% 
+    group_by(cluster) %>% 
+    mutate(n_sep_deg = min(n_sep_deg)) %>% 
+    unique ->
+    min_sep_deg_for_clusts
+
+min_sep_deg_for_clusts
+```
+
+join in each cluster's self-mapping f1 score
+
+```{r}
+min_sep_deg_for_clusts$n_sep_deg %>% unique %>% sort
+```
+
+```{r}
+df_map_vs_deg <- left_join(
+    select(pred_accuracy_table, prediction, precision, recall, f1),
+    min_sep_deg_for_clusts,
+    by = join_by(prediction == cluster)
+)
+df_map_vs_deg$n_sep_deg <- as.character(df_map_vs_deg$n_sep_deg)
+df_map_vs_deg$n_sep_deg[is.na(df_map_vs_deg$n_sep_deg)] <- ">10"
+df_map_vs_deg$n_sep_deg <- factor(
+    df_map_vs_deg$n_sep_deg,
+    levels = c(as.character(0:10), ">10")
+)
+```
+
+```{r}
+df_map_vs_deg %>% 
+    ggplot( 
+        aes(n_sep_deg, precision)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x = "min no. spatial panel DEGs separating cluster from another", 
+        title = "Of Most Transcriptionally Similar Cluster Pairs"
+    ) + 
+    theme_md_classic()
+
+df_map_vs_deg %>% 
+    ggplot( 
+        aes(n_sep_deg, recall)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x = "min no. spatial panel DEGs separating cluster from another", 
+        title = "Of Most Transcriptionally Similar Cluster Pairs"
+    ) + 
+    theme_md_classic()
+
+df_map_vs_deg %>% 
+    ggplot( 
+        aes(n_sep_deg, f1)
+    ) + 
+    geom_boxplot() + 
+    labs(
+        x = "smallest number of spatial panel DEGs separating cluster from another", 
+        y = "self-mapping f1 score at the Cluster level"
+        # title = "For Clusters with Similar"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+table(df_map_vs_deg$n_sep_deg)
+filter(df_map_vs_deg, n_sep_deg=="0")
+```
+
+
+# Quick check StrioMat self-mapping
+
+```{r}
+pred_accuracy_table %>% 
+    filter(Subcortex_Group_v4 == "STRd D2 StrioMat Hybrid MSN")
+```
+
+```{r}
+pred_accuracy_table %>% 
+    filter(Subcortex_Group_v4 == "STRd D2 StrioMat Hybrid MSN") %>% 
+    write.csv("/Users/mike/Downloads/striomat_hybrid_self_mapping.csv", row.names=FALSE)
+```
+
+
+```{r}
+pred_accuracy_table %>% 
+    filter(prediction=="cluster_55")
+```
+
+
+
+
+
