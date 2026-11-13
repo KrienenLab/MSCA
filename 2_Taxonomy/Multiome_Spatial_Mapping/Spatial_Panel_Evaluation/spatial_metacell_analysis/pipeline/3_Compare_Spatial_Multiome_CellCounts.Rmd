@@ -140,9 +140,6 @@ Brian used CJ23.56.003 = cjNutmeg
 Let's double check
 
 ```{r}
-# aggregate(n_cell ~ mit_name, donor_counts, FUN=sum) %>% 
-#     arrange(n_cell) %>% 
-#     print.data.frame
 
 #      mit_name n_cell
 # 1 cjCroissant  32525

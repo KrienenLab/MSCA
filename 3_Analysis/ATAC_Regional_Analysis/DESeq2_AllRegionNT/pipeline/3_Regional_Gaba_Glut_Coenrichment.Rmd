@@ -532,8 +532,6 @@ subset(all_pairs_coenr, same_region) %>%
 ```
 
 
-
-
 OLD (when just GABA and Glut, and no OlfC, and no cluster-level regional
 annotations):
 ```
@@ -824,7 +822,5 @@ $HTH
 
 So I suppose half of the top20 overlap. Overall they're probably somewhat 
 similar.
-
-
 
 
