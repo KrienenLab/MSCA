@@ -71,7 +71,7 @@ Output files are relative to `combined_analysis/plots/`.
 | 5I | `TEL_Glut_vs_LGE/scatter_tel_glut_v_lge_coenrich_regulon_z[_big,_rev].pdf` | lines 3615-3635, "(!) Scatterplot regulon, enrichment vs. background" |
 | 5J | `TEL_Glut_vs_LGE/dotplot_enr_selected_terms_signal[2].pdf` | lines 4888-4934, "DotPlot selected terms" |
 | 5K | network images downloaded from string-db, annotated in Illustrator | gene list exported at line 4147; selected terms at line 4845 |
-| 5L | `CRACDL/cracdl_exp_regulon_z_sideways_topbar.pdf` (rotated) | line 6607, "(!) Change to using exp (CPM), not LFC" |
+| 5L | `CRACDL/cracdl_regulon_z_sideways_topbar.pdf` (rotated) | line 6506, "Plot regulons & enrichment together". The later CPM version at line 6607 was not used. |
 
 ### Figure 7
 
