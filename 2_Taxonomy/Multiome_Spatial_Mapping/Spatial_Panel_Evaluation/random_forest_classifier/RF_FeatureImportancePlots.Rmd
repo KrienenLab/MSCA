@@ -1,0 +1,314 @@
+---
+title: "RF_FeatureImportancePlots"
+output: html_document
+date: "2026-03-19"
+---
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+    library(ggrepel)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),  # was size 8 in other notebooks?
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        complete = TRUE
+    )
+}
+
+theme_md_bw <- function() {
+    theme_bw(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),
+        strip.text.y = element_text(angle = 0),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, color = "black"),
+        complete = TRUE
+    )
+}
+```
+
+# [SKIP] with 4k hvgs model
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+outdir <- file.path(pdir, "random_forest_classifier/4k_hvgs")
+plotdir <- file.path(outdir, "plots")
+
+if (!dir.exists(plotdir))
+    dir.create(plotdir)
+```
+
+
+```{r}
+feat_imp <- read.csv(file.path(outdir, "feature_importances.csv"))
+feat_imp <- feat_imp[,-1]
+feat_imp$Spatial.Panel <- as.logical(toupper(feat_imp$Spatial.Panel))
+names(feat_imp) <- c("gene", "importance", "spatial_panel")
+```
+
+
+```{r}
+# > table(feat_imp$spatial_panel)
+# FALSE  TRUE 
+#  3804   196 
+```
+
+```{r}
+ggplot(feat_imp, aes(spatial_panel, importance)) + 
+    geom_boxplot() + 
+    theme_md_classic()
+```
+
+```{r}
+feat_imp %>% 
+    mutate(
+        rank_pct = rank(importance) / 4e3
+    ) %>% 
+    filter(spatial_panel) %>% 
+    ggplot(aes("Spatial Panel", rank_pct)) + 
+    geom_boxplot(color="red") + 
+    scale_y_continuous(labels = scales::percent) + 
+    # scale_x_(labels = "Spatial Panel") + 
+    labs(y = "Rank Percentile", x=NULL) + 
+    theme_md_classic() + 
+    theme() -> p2
+p2
+```
+
+```{r}
+# feat_imp %>% 
+#     mutate(
+#         rank_pct = rank(importance) / 4e3
+#     ) %>% 
+#     filter(spatial_panel) %>% 
+#     .$rank_pct %>% 
+#     median
+# [1] 0.869625
+```
+
+
+```{r}
+feat_imp %>% 
+    mutate(
+        rank_pct = rank(importance) / 4e3
+    ) %>% 
+    arrange(spatial_panel) %>% 
+    ggplot(
+        aes(importance, rank_pct, color = spatial_panel)
+    ) + 
+    geom_point() + 
+    scale_color_manual(values = c("gray", "red")) + 
+    labs(
+        x = "Feature Importance",
+        y = "Rank Percentile",
+        color = "Gene in\nSpatial Panel"
+    ) + 
+    theme_md_classic() -> p1
+p1
+```
+
+```{r}
+{
+    p1 + scale_x_continuous(labels = scales::percent)
+} + p2 + plot_layout(widths = c(3, 1))
+```
+
+```{r}
+feat_imp %>% 
+    mutate(
+        rank_pct = rank(importance) / 4e3
+    ) %>% 
+    # remake this so that we don't plot by in-vs-not-in panel, but by only
+    # panel vs. all 4k hvgs
+    (function(x) {
+        out <- x[, -3]
+        out$set <- "All 4k HVGs"
+        x <- filter(x, spatial_panel)
+        x <- x[,-3]
+        x$set <- "Spatial Panel Genes"
+        rbind(out, x)
+    }) %>% 
+    ggplot(aes(set, rank_pct)) + 
+    geom_boxplot(outlier.size = 0.5, outlier.shape = 16) + 
+    scale_y_continuous(labels = scales::percent, expand=c(0, 0)) +
+    labs(
+        x = NULL, y = "Feature Importance Percentile",
+        title = "Random Forest Classifier\nFeature Importance"
+    ) + 
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1)
+    )
+```
+
+```{r}
+ggsave(
+    file.path(plotdir, "boxplot_rank_pct_importance_all-vs-panel.pdf"),
+    width=40, height=50, units="mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path(plotdir, "boxplot_rank_pct_importance_all-vs-panel2.pdf"),
+    width=25, height=50, units="mm"
+)
+```
+
+# with union of 4k hvgs and spatial panel
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+outdir <- file.path(pdir, "random_forest_classifier/union_4k_hvgs_spatial_panel")
+plotdir <- file.path(outdir, "plots")
+
+if (!dir.exists(plotdir))
+    dir.create(plotdir)
+```
+
+```{r}
+path_spatial_panel <- '/Volumes/krienen/lab_members/daisy/hmba/xenium_genes_2024.csv'
+path_hvgs <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/preprint_freeze/RNA_HVG_4K_preprint_freeze.csv"
+
+panel_gns <- read.csv(path_spatial_panel)[[1]]
+hvgs <- read.csv(path_hvgs)[[1]]
+```
+
+```{r}
+feat_imp <- read.csv(file.path(outdir, "feature_importances_4104__1000_trees.csv"))
+names(feat_imp) <- c("gene", "importance")
+```
+
+and add rank importance 
+
+```{r}
+feat_imp$rank_pct = rank(feat_imp$importance) / nrow(feat_imp)
+```
+
+make separate rows for each gene set, so that we allow overlapping genes to
+appear in both in plots
+
+```{r}
+rbind(
+    mutate(filter(feat_imp, gene %in% hvgs), set = "4k HVGs"),
+    mutate(filter(feat_imp, gene %in% panel_gns), set = "Spatial Panel Genes")
+) %>% 
+    ggplot(aes(set, rank_pct)) + 
+    geom_boxplot(outlier.size = 0.5, outlier.shape = 16) + 
+    scale_y_continuous(labels = scales::percent, expand=c(0, 0)) +
+    labs(
+        x = NULL, y = "Feature Importance Percentile",
+        title = "Random Forest Classifier\nFeature Importance"
+    ) + 
+    theme_md_classic() + 
+    theme(
+        axis.text.x = element_text(angle=30, hjust=1)
+    )
+```
+
+```{r}
+ggsave(
+    file.path(plotdir, "boxplot_rank_pct_importance_hvgs-vs-panel.pdf"),
+    width=40, height=50, units="mm"
+)
+```
+
+```{r}
+ggsave(
+    file.path(plotdir, "boxplot_rank_pct_importance_hvgs-vs-panel2.pdf"),
+    width=25, height=50, units="mm"
+)
+```
+
+
+```{r}
+rbind(
+    mutate(filter(feat_imp, gene %in% hvgs), set = "4k HVGs"),
+    mutate(filter(feat_imp, gene %in% panel_gns), set = "Spatial Panel Genes")
+) %>% 
+    dplyr::group_by(set) %>% 
+    summarize(median(rank_pct))
+```
+
+median panel gene in 86th percentile of feature importance
+
+what are these useless panel genes?
+[note that most of the lowest importance genes are in 4k HVGs alone]
+
+```{r}
+feat_imp %>% 
+    mutate(
+        set = ifelse(
+            gene %in% panel_gns,
+            ifelse(
+                gene %in% hvgs,
+                "Both",
+                "Spatial Panel"
+            ),
+            "4k HVGs"
+        )
+    ) %>% 
+    filter(!set == "4k HVGs") %>% 
+    arrange(rank_pct) %>% 
+    head(30) %>% 
+    print.data.frame
+
+#            gene   importance   rank_pct           set
+# 1         MS4A1 1.090916e-06 0.04483431 Spatial Panel
+# 2          CD3D 3.682431e-06 0.07602339 Spatial Panel
+# 3         FCER2 4.827610e-06 0.08698830 Spatial Panel
+# 4         EID2B 8.189432e-06 0.11159844 Spatial Panel
+# 5         GNG11 1.311600e-05 0.14790448          Both
+# 6          DOK1 2.099351e-05 0.19030214 Spatial Panel
+# 7         CLDN5 2.167286e-05 0.19346979          Both
+# 8         TNNT1 2.704844e-05 0.22173489          Both
+# 9          PAX8 2.849096e-05 0.22904483          Both
+# 10        HTR1A 3.922591e-05 0.27192982          Both
+# 11        CBLN1 4.125426e-05 0.27948343          Both
+# 12        IL1R1 6.885971e-05 0.37280702 Spatial Panel
+# 13       MFSD2A 7.518780e-05 0.38888889 Spatial Panel
+# 14       HAPLN1 7.719572e-05 0.39376218          Both
+# 15       SLC2A1 9.020234e-05 0.42665692 Spatial Panel
+# 16         LMO1 9.973960e-05 0.45053606          Both
+# 17        SMAD7 1.040678e-04 0.45808967 Spatial Panel
+# 18       PECAM1 1.047029e-04 0.45955166 Spatial Panel
+# 19         ACHE 1.070025e-04 0.46418129 Spatial Panel
+# 20        ADIRF 1.086085e-04 0.46734893 Spatial Panel
+# 21        PITX2 1.146698e-04 0.48269981          Both
+# 22      ADCYAP1 1.203760e-04 0.49220273          Both
+# 23         GFAP 1.207890e-04 0.49293372 Spatial Panel
+# 24     ADAMTS18 1.400786e-04 0.52875244          Both
+# 25        SMOC2 1.406674e-04 0.52972710          Both
+# 26        GATA3 1.407331e-04 0.52997076          Both
+# 27         EYA4 1.503589e-04 0.54312865          Both
+# 28 LOC100385731 1.526385e-04 0.54873294          Both
+# 29         RGS5 1.552912e-04 0.55214425          Both
+# 30      ONECUT1 1.619289e-04 0.56578947          Both
+```
+

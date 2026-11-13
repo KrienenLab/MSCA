@@ -1,0 +1,1684 @@
+---
+title: "4_Heatmap_Gaba_Glut_Enrichment_RNA_and_ATAC"
+output: html_document
+date: "2025-10-09"
+---
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ggplot2)
+    library(patchwork)
+    library(ComplexHeatmap)
+    library(circlize)
+    library(viridis)
+    library(grid)
+    library(ggrepel)
+    library(extrafont)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        plot.title  = element_text(hjust = 0.5, face = "bold", size = 8),
+        axis.title  = element_text(color = "black", size = 6),
+        axis.text   = element_text(color = "black", size = 6),
+        axis.ticks  = element_line(color = "black"),
+        legend.text = element_text(size = 6),
+        strip.text  = element_text(size = 8),
+        strip.background = element_blank(),
+        complete = TRUE
+    )
+}
+```
+
+```{r}
+pdir_rna  <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT_RNA"
+pdir_atac <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT"
+```
+
+## Import previous co-enrichment analyses
+
+```{r}
+coenr_rna  <- read.csv(file.path(pdir_rna,  "data/shrLFC_q98_coenrich_analysis.csv"))
+coenr_atac <- read.csv(file.path(pdir_atac, "data/shrLFC_q99_coenrich_analysis.csv"))
+```
+
+
+## Import DESeq2 results (RNA & ATAC)
+
+```{r}
+dir_dsres_rna <- file.path(pdir_rna, "DESeq2_results")
+dsres_rna <- lapply(dir(dir_dsres_rna), function(x) {
+    read.csv(file.path(dir_dsres_rna, x, "DESeq2_apeglm_results.csv"), row.names="X")
+})
+names(dsres_rna) <- dir(dir_dsres_rna)
+```
+
+
+```{r}
+dir_dsres_atac <- file.path(pdir_atac, "DESeq2_results")
+dsres_atac <- lapply(dir(dir_dsres_atac), function(x) {
+    read.csv(file.path(dir_dsres_atac, x, "DESeq2_apeglm_results.csv"), row.names="X")
+})
+names(dsres_atac) <- dir(dir_dsres_atac)
+```
+
+## Import eRegulons
+
+```{r}
+ereg_dir <- read.delim("/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulon_direct.tsv")
+ereg_ext <- read.delim("/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulons_extended.tsv")
+```
+
+I'll also just combine them together...
+
+although idk it looks like the ranks were done separately. also don't correlate
+to anything (if i order by those ranks no other numbers look to have any 
+pattern)
+
+```{r}
+stopifnot(all(names(ereg_dir) == names(ereg_ext)))
+idx  <- which(names(ereg_dir) == "triplet_rank")
+ereg <- rbind(ereg_dir[,-idx], ereg_ext[,-idx])
+```
+
+
+# Make heatmaps of enrichments
+
+```{r}
+names_res <- sort(unique(c(coenr_rna$A, coenr_rna$B)))
+nres <- length(names_res)
+```
+
+```{r}
+enr_mat_rna <- enr_mat_atac <- matrix(
+    NA, nrow=nres, ncol=nres,
+    dimnames = list(names_res, names_res)
+)
+
+for (i in seq_len(nrow(coenr_rna))) {
+    rw <- coenr_rna$A[i]
+    cl <- coenr_rna$B[i]
+    enr_mat_rna[rw, cl] <- coenr_rna$enrichment[i]
+    enr_mat_rna[cl, rw] <- coenr_rna$enrichment[i]
+}
+
+for (i in seq_len(nrow(coenr_atac))) {
+    rw <- coenr_atac$A[i]
+    cl <- coenr_atac$B[i]
+    enr_mat_atac[rw, cl] <- coenr_atac$enrichment[i]
+    enr_mat_atac[cl, rw] <- coenr_atac$enrichment[i]
+}
+```
+
+
+
+
+## RNA
+
+```{r}
+Heatmap(
+    enr_mat_rna,
+    heatmap_legend_param = list(title = "peak coenrichment\n(98th percentiles)\nobs/exp"),
+    col = circlize::colorRamp2(seq(0, 30, length.out=100), viridis::viridis(100))
+)
+```
+
+## ATAC
+
+```{r}
+Heatmap(
+    enr_mat_atac,
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nobs/exp"),
+    col = circlize::colorRamp2(seq(0, 40, length.out=100), viridis::viridis(100))
+)
+```
+
+# Make divided/triangular heatmap
+
+```{r}
+# ---- 1) Fix the ordering from RNA ----
+# Replace NAs when clustering to avoid distance problems; keep the matrices unchanged for plotting
+rna_for_clust <- enr_mat_rna
+rna_for_clust[is.na(rna_for_clust)] <- 0
+
+# Use the same order for rows and cols (symmetric matrix)
+hc   <- hclust(dist(rna_for_clust))
+ord  <- order.dendrogram(as.dendrogram(hc))
+
+rna_ord  <- enr_mat_rna[ord, ord, drop = FALSE]
+atac_ord <- enr_mat_atac[ord, ord, drop = FALSE]
+
+# ---- 2) Color functions & legends (separate scales for RNA vs ATAC) ----
+col_rna  <- circlize::colorRamp2(seq(0, 30, length.out = 100), viridis(100))
+col_atac <- circlize::colorRamp2(seq(0, 40, length.out = 100), viridis(100))
+
+lgd_rna  <- Legend(title = "RNA coenrichment\n(98th pct)\nobs/exp", col_fun = col_rna)
+lgd_atac <- Legend(title = "ATAC coenrichment\n(99th pct)\nobs/exp", col_fun = col_atac)
+
+# ---- 3) Empty canvas heatmap; we'll draw each cell ourselves ----
+# (Use a dummy matrix with the same dimnames so labels render nicely.)
+dummy <- matrix(
+    NA_real_, nrow = length(ord), ncol = length(ord),
+    dimnames = list(rownames(rna_ord), colnames(rna_ord))
+)
+
+ht <- Heatmap(
+    dummy,
+    name = "tri",
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    rect_gp = gpar(col = NA),
+    show_heatmap_legend = FALSE,
+    cell_fun = function(j, i, x, y, w, h, fill) {
+        # i = row index, j = column index, already in RNA order
+        v_rna  <- rna_ord[i, j]
+        v_atac <- atac_ord[i, j]
+        
+        if (i < j && !is.na(v_rna)) {
+            grid.rect(x, y, w, h, gp = gpar(fill = col_rna(v_rna),  col = NA))
+        } else if (i > j && !is.na(v_atac)) {
+            grid.rect(x, y, w, h, gp = gpar(fill = col_atac(v_atac), col = NA))
+        } else if (i == j) {
+            # white diagonal
+            grid.rect(x, y, w, h, gp = gpar(fill = "white", col = NA))
+        } else {
+            # NA blank
+        }
+    }
+)
+
+# ---- 4) Draw with both legends; optional diagonal separator ----
+draw(ht, heatmap_legend_list = list(lgd_rna, lgd_atac))
+
+# Optional: draw a diagonal line across the heatmap body for clarity
+decorate_heatmap_body("tri", {
+    grid.lines(x = unit(c(0, 1), "npc"), y = unit(c(1, 0), "npc"),
+               gp = gpar(lwd = 1, col = "grey30"))
+})
+```
+
+```{r}
+pdf(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "heatmap_coenr_rna_top_atac_bottom.pdf"),
+    width=9
+)
+draw(ht, heatmap_legend_list = list(lgd_rna, lgd_atac))
+decorate_heatmap_body("tri", {
+    grid.lines(x = unit(c(0, 1), "npc"), y = unit(c(1, 0), "npc"),
+               gp = gpar(lwd = 1, col = "grey30"))
+})
+invisible(dev.off())
+```
+
+## Keep in region order
+
+```{r}
+# ---- 1) Alphabetical order from RNA dimnames ----
+ord_names <- sort(rownames(enr_mat_rna))     # same for cols since square
+ord <- match(ord_names, rownames(enr_mat_rna))
+
+rna_ord  <- enr_mat_rna[ord, ord, drop = FALSE]
+atac_ord <- enr_mat_atac[ord, ord, drop = FALSE]
+
+# dummy stays the same:
+dummy <- matrix(
+  NA_real_, nrow = length(ord), ncol = length(ord),
+  dimnames = list(rownames(rna_ord), colnames(rna_ord))
+)
+
+ht <- Heatmap(
+    dummy,
+    name = "tri",
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    rect_gp = gpar(col = NA),
+    show_heatmap_legend = FALSE,
+    cell_fun = function(j, i, x, y, w, h, fill) {
+        # i = row index, j = column index, already in RNA order
+        v_rna  <- rna_ord[i, j]
+        v_atac <- atac_ord[i, j]
+        
+        if (i < j && !is.na(v_rna)) {
+            grid.rect(x, y, w, h, gp = gpar(fill = col_rna(v_rna),  col = NA))
+        } else if (i > j && !is.na(v_atac)) {
+            grid.rect(x, y, w, h, gp = gpar(fill = col_atac(v_atac), col = NA))
+        } else if (i == j) {
+            # white diagonal
+            grid.rect(x, y, w, h, gp = gpar(fill = "white", col = NA))
+        } else {
+            # NA blank
+        }
+    }
+)
+
+# ---- 4) Draw with both legends; optional diagonal separator ----
+draw(ht, heatmap_legend_list = list(lgd_rna, lgd_atac))
+
+# Optional: draw a diagonal line across the heatmap body for clarity
+decorate_heatmap_body("tri", {
+    grid.lines(x = unit(c(0, 1), "npc"), y = unit(c(1, 0), "npc"),
+               gp = gpar(lwd = 1, col = "grey30"))
+})
+```
+
+```{r}
+pdf(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "heatmap_coenr_rna_top_atac_bottom_regionorder.pdf"),
+    width=9
+)
+draw(ht, heatmap_legend_list = list(lgd_rna, lgd_atac))
+decorate_heatmap_body("tri", {
+    grid.lines(x = unit(c(0, 1), "npc"), y = unit(c(1, 0), "npc"),
+               gp = gpar(lwd = 1, col = "grey30"))
+})
+invisible(dev.off())
+```
+
+# Plot rank vs. enr
+
+```{r}
+coenr_rna
+```
+
+
+```{r}
+coenr_rna %>% 
+    .[order(.$same_region), ] %>% 
+    ggplot(aes(rank_overall, enrichment, color = same_region, shape = same_nt)) + 
+    geom_point() + 
+    scale_color_manual(values = c("black", "red")) +
+    labs(x = "RNA co-enrichment rank", y = "enrichment (obs/exp)") + 
+    theme_md_classic()
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "rank_enr_vs_enr_rna.pdf")
+)
+```
+
+```{r}
+coenr_atac %>% 
+    .[order(.$same_region), ] %>% 
+    ggplot(aes(rank_overall, enrichment, color = same_region, shape = same_nt)) + 
+    geom_point() + 
+    scale_color_manual(values = c("black", "red")) +
+    labs(x = "ATAC co-enrichment rank", y = "enrichment (obs/exp)") + 
+    theme_md_classic()
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "rank_enr_vs_enr_atac.pdf")
+)
+```
+
+## Add labels for top hits
+
+RNA
+
+```{r}
+set.seed(123)  # reproducible repel
+
+p_rna <- coenr_rna %>% 
+    .[order(.$same_region), ] %>% 
+    (function(x) {
+        idx <- which(x$same_region)[1:8]
+        x$label <- ""
+        x$label[idx] <- paste0(x$region_A[idx], ": ", x$nt_A[idx], " & ", x$nt_B[idx])
+        x
+    }) %>% 
+    ggplot(aes(rank_overall, enrichment, color = same_region, shape = same_nt)) +
+    geom_point() +
+    geom_text_repel(
+        data = ~ dplyr::filter(., label != ""),
+        aes(label = label),
+        direction = "y",             # stack labels vertically, move horizontally if needed
+        nudge_x = 250,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    scale_color_manual(values = c("black", "red2")) +
+    labs(
+        title = "RNA",
+        x = "DEG co-enrichment rank", 
+        y = "DEG co-enrichment (obs/exp)"
+    ) +
+    theme_md_classic() +
+    expand_limits(x = max(coenr_rna$rank_overall, na.rm = TRUE) + 8) +  # room on right
+    coord_cartesian(clip = "off")
+    # theme(plot.margin = margin(5.5, 30, 5.5, 5.5))  # extra right margin for labels
+
+print(p_rna)
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "rank_enr_vs_enr_rna_labeled.pdf"),
+    p_rna, #width = 4, height = 5
+    width = 100, height = 90, units = "mm"
+    # device = cairo_pdf
+)
+
+```
+
+```{r}
+set.seed(123)  # reproducible repel
+
+p_atac <- coenr_atac %>% 
+    .[order(.$same_region), ] %>% 
+    (function(x) {
+        idx <- which(x$same_region)[1:8]
+        x$label <- ""
+        x$label[idx] <- paste0(x$region_A[idx], ": ", x$nt_A[idx], " & ", x$nt_B[idx])
+        x
+    }) %>% 
+    ggplot(aes(rank_overall, enrichment, color = same_region, shape = same_nt)) +
+    geom_point() +
+    geom_text_repel(
+        data = ~ dplyr::filter(., label != ""),
+        aes(label = label),
+        direction = "y",             # stack labels vertically, move horizontally if needed
+        nudge_x = 250,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    scale_color_manual(values = c("black", "red2")) +
+    # labs(x = "ATAC co-enrichment rank", y = "enrichment (obs/exp)") +
+    labs(
+        title = "ATAC",
+        x = "DAR co-enrichment rank", 
+        y = "DAR co-enrichment (obs/exp)"
+    ) +
+    theme_md_classic() +
+    expand_limits(x = max(coenr_rna$rank_overall, na.rm = TRUE) + 8) +  # room on right
+    coord_cartesian(clip = "off")
+    # theme(plot.margin = margin(5.5, 30, 5.5, 5.5))  # extra right margin for labels
+
+print(p_atac)
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "rank_enr_vs_enr_atac_labeled.pdf"),
+    p_atac, # width = 6, height = 4
+    width = 100, height = 90, units = "mm"
+    # device = cairo_pdf
+)
+
+```
+
+```{r}
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "rank_enr_vs_enr_rna_and_atac_labeled.pdf"),
+    p_rna + p_atac + plot_layout(guides = "collect"),
+    width = 130, height = 70, units = "mm",
+    device = cairo_pdf
+) 
+```
+
+# Plot enr RNA vs enr ATAC
+
+```{r}
+col_ids <- names(coenr_rna)[1:8]
+list(
+    rna = coenr_rna,
+    atac = coenr_atac
+) %>% 
+    Map(function(x, nm) {
+        idx_chg <- which(!names(x) %in% col_ids)
+        names(x)[idx_chg] <- paste0(nm, "_", names(x)[idx_chg])
+        x
+    }, ., names(.)) %>% 
+    setNames(c("x", "y")) %>% 
+    c(list(by = col_ids)) %>% 
+    do.call(left_join, .) -> coenr_comb
+```
+
+```{r}
+coenr_comb %>% 
+    .[order(.$same_region), ] %>% 
+    (function(x) {
+        idx <- which(x$same_region)[1:8]
+        x$label <- ""
+        x$label[idx] <- paste0(x$region_A[idx], ": ", x$nt_A[idx], " & ", x$nt_B[idx])
+        x
+    }) %>% 
+    ggplot(aes(rna_enrichment, atac_enrichment, color = same_region, shape = same_nt)) +
+    geom_point() +
+    geom_text_repel(
+        data = ~ dplyr::filter(., label != ""),
+        aes(label = label),
+        direction = "y",             # stack labels vertically, move horizontally if needed
+        nudge_x = 5,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    scale_color_manual(values = c("black", "red2")) +
+    # labs(x = "ATAC co-enrichment rank", y = "enrichment (obs/exp)") +
+    labs(
+        # title = "ATAC",
+        x = "DEG co-enrichment\n(obs/exp)", 
+        y = "DAR co-enrichment\n(obs/exp)"
+    ) +
+    theme_md_classic() +
+    coord_cartesian(clip = "off")
+```
+
+## (!) Plot for only GABA & Glut
+
+```{r}
+coenr_comb
+```
+
+
+```{r}
+coenr_comb %>% 
+    subset(
+        (nt_A %in% c("GABA", "Glut")) & (nt_B %in% c("GABA", "Glut"))
+    ) %>% 
+    .[order(.$same_region), ] %>% 
+    (function(x) {
+        # idx <- which(x$same_region)[1:8]
+        idx <- which(x$same_region)
+        x$label <- ""
+        # x$label[idx] <- paste0(x$region_A[idx], ": ", x$nt_A[idx], " & ", x$nt_B[idx])
+        x$label[idx] <- paste0(x$region_A[idx])
+        x
+    }) %>% 
+    ggplot(aes(rna_enrichment, atac_enrichment, color = same_region, shape = same_nt)) +
+    geom_point() +
+    geom_text_repel(
+        data = ~ dplyr::filter(., label != ""),
+        aes(label = label),
+        direction = "y",           # stack labels vertically, move horizontally if needed
+        # direction = "x",           # stack labels vertically, move horizontally if needed
+        nudge_y = 15,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "red2",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    scale_color_manual(values = c("black", "red2")) +
+    # labs(x = "ATAC co-enrichment rank", y = "enrichment (obs/exp)") +
+    labs(
+        # title = "All Pairs Glut & GABA Neurons\nGrouped by Region",
+        title = "Glut & GABA Neurons\nGrouped by Region:\nAll Pairwise Comparisons",
+        x = "RNA co-enrichment\n(obs/exp)", 
+        y = "ATAC co-enrichment\n(obs/exp)"
+    ) +
+    theme_md_classic() +
+    coord_cartesian(clip = "off")
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "enr_rna_vs_enr_atac_gaba_glut_only.pdf"),
+    width = 60, height = 50, units = "mm"
+)
+```
+
+[Also figure out what those highly co-enr atac peaks are]
+
+```{r}
+coenr_atac
+```
+
+AMY_Glut+OlfC_Glut [40.24 ATAC]
+CTX_GABA+HiF_GABA [36.4 ATAC]
+
+```{r}
+subset(coenr_atac, (A == "OlfC_GABA") | (B == "OlfC_GABA"))
+```
+
+
+Exclude OlfC maybe?
+
+```{r}
+coenr_comb %>% 
+    subset(
+        (nt_A %in% c("GABA", "Glut")) & (nt_B %in% c("GABA", "Glut"))
+    ) %>% 
+    subset(
+        (region_A != "OlfC") & (region_B != "OlfC") 
+    ) %>% 
+    .[order(.$same_region), ] %>% 
+    (function(x) {
+        # idx <- which(x$same_region)[1:8]
+        idx <- which(x$same_region)
+        x$label <- ""
+        # x$label[idx] <- paste0(x$region_A[idx], ": ", x$nt_A[idx], " & ", x$nt_B[idx])
+        x$label[idx] <- paste0(x$region_A[idx])
+        x
+    }) %>% 
+    ggplot(aes(rna_enrichment, atac_enrichment, color = same_region)) + #, shape = same_nt)) +
+    geom_point() +
+    geom_text_repel(
+        data = ~ dplyr::filter(., label != ""),
+        aes(label = label),
+        direction = "y",           # stack labels vertically, move horizontally if needed
+        # direction = "x",           # stack labels vertically, move horizontally if needed
+        nudge_y = 15,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "red2",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    scale_color_manual(values = c("black", "red2")) +
+    # labs(x = "ATAC co-enrichment rank", y = "enrichment (obs/exp)") +
+    labs(
+        # title = "All Pairs Glut & GABA Neurons\nGrouped by Region",
+        title = "Glut & GABA Neurons\nGrouped by Region:\nAll Pairwise Comparisons",
+        x = "RNA co-enrichment\n(obs/exp)", 
+        y = "ATAC co-enrichment\n(obs/exp)"
+    ) +
+    theme_md_classic() +
+    coord_cartesian(clip = "off") + 
+    theme(
+        axis.title = element_text(size=8)
+    )
+
+ggsave(
+    file.path(pdir_rna, "Gaba-Glut_CoEnrichment", "enr_rna_vs_enr_atac_gaba_glut_only_dropOlfC.pdf"),
+    width = 60, height = 50, units = "mm"
+)
+```
+
+# (Redo ATAC hexbin LFC plot for MB & THM?)
+
+--> MOVE TO ATAC NOTEBOOK (change dsres_atac to dsres and fix output dir)
+
+For a final figure, will just do here...
+
+```{r}
+# dir_plt <- file.path(pdir_gagl, "hexbin_glut_vs_gaba_show_q99")
+# if (!dir.exists(dir_plt))
+#     dir.create(dir_plt)
+
+q <- 0.99
+
+rg <- "MB"
+df <- data.frame(
+    glut = dsres_atac[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+    gaba = dsres_atac[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+)
+tx <- quantile(df$glut, q, na.rm = TRUE)
+ty <- quantile(df$gaba, q, na.rm = TRUE)
+
+p1 <- ggplot(df, aes(glut, gaba)) + 
+    geom_hex(bins=50) + 
+    geom_hline(yintercept=0, linewidth=0.25) +
+    geom_vline(xintercept=0, linewidth=0.25) +
+    geom_abline(slope=1, intercept=0, linewidth=0.25) +
+    geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+    geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+    scale_fill_viridis_c(
+        trans="log2",
+        guide = guide_colorbar(
+            draw.llim = FALSE,
+            barwidth = 0.5
+        )
+    ) +
+    coord_fixed(xlim = c(-5, 5), ylim = c(-5,5)) +
+    labs(
+        title = paste(rg, "Peak Co-Enrichment"),
+        x = paste0(rg, " Glut vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        y = paste0(rg, " GABA vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        # x = paste0(rg, " Glut vs. non-", rg),
+        # y = paste0(rg, " GABA vs. non-", rg),
+        fill = "peaks"
+    ) + 
+    theme_md_classic()
+# ggsave(
+#     file.path(dir_plt, paste0(rg, ".pdf")),
+#     p,
+#     width=6, height=4
+# )
+
+p1
+```
+
+```{r}
+rg <- "HTH"
+df <- data.frame(
+    glut = dsres_atac[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+    gaba = dsres_atac[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+)
+tx <- quantile(df$glut, q, na.rm = TRUE)
+ty <- quantile(df$gaba, q, na.rm = TRUE)
+
+p2 <- ggplot(df, aes(glut, gaba)) + 
+    geom_hex(bins=50) + 
+    geom_hline(yintercept=0, linewidth=0.25) +
+    geom_vline(xintercept=0, linewidth=0.25) +
+    geom_abline(slope=1, intercept=0, linewidth=0.25) +
+    geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+    geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+    scale_fill_viridis_c(
+        trans="log2",
+        guide = guide_colorbar(
+            draw.llim = FALSE,
+            barwidth = 0.5
+        )
+    ) +
+    coord_fixed(xlim = c(-5, 5), ylim = c(-5,5)) +
+    labs(
+        title = paste(rg, "Peak Co-Enrichment"),
+        x = paste0(rg, " Glut vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        y = paste0(rg, " GABA vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        # x = paste0(rg, " Glut vs. non-", rg),
+        # y = paste0(rg, " GABA vs. non-", rg),
+        fill = "peaks"
+    ) + 
+    theme_md_classic() 
+# ggsave(
+#     file.path(dir_plt, paste0(rg, ".pdf")),
+#     p,
+#     width=6, height=4
+# )
+
+p2
+```
+
+```{r}
+rg <- "THM"
+df <- data.frame(
+    glut = dsres_atac[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+    gaba = dsres_atac[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+)
+tx <- quantile(df$glut, q, na.rm = TRUE)
+ty <- quantile(df$gaba, q, na.rm = TRUE)
+
+p3 <- ggplot(df, aes(glut, gaba)) + 
+    geom_hex(bins=50) + 
+    geom_hline(yintercept=0, linewidth=0.25) +
+    geom_vline(xintercept=0, linewidth=0.25) +
+    geom_abline(slope=1, intercept=0, linewidth=0.25) +
+    geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+    geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+    scale_fill_viridis_c(
+        trans="log2",
+        guide = guide_colorbar(
+            draw.llim = FALSE,
+            barwidth = 0.5
+        )
+    ) +
+    coord_fixed(xlim = c(-5, 5), ylim = c(-5,5)) +
+    labs(
+        title = paste(rg, "Peak Co-Enrichment"),
+        x = paste0(rg, " Glut vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        y = paste0(rg, " GABA vs. non-", rg, "\n(shrunken log2FoldChange)"),
+        # x = paste0(rg, " Glut vs. non-", rg),
+        # y = paste0(rg, " GABA vs. non-", rg),
+        fill = "peaks"
+    ) + 
+    theme_md_classic() 
+# ggsave(
+#     file.path(dir_plt, paste0(rg, ".pdf")),
+#     p,
+#     width=6, height=4
+# )
+
+p3
+```
+
+```{r}
+ggsave(
+    file.path(pdir_atac, "Gaba-Glut_CoEnrichment/hexbin_gaba_glut_q99_mb_hth_combined.pdf"),
+    p1 + p2 + plot_layout(guides = "collect"),
+    # width = 160, height = 100, units = "mm",
+    width = 100, height = 70, units = "mm"
+    # device = cairo_pdf
+)
+```
+
+```{r}
+ggsave(
+    file.path(pdir_atac, "Gaba-Glut_CoEnrichment/hexbin_gaba_glut_q99_mb_hth_thm_combined.pdf"),
+    p1 + p2 + p3 + plot_layout(guides = "collect"),
+    # width = 160, height = 100, units = "mm",
+    width = 145, height = 65, units = "mm"
+    # device = cairo_pdf
+)
+```
+
+```{r}
+ggsave(
+    file.path(pdir_atac, "Gaba-Glut_CoEnrichment/hexbin_gaba_glut_q99_mb_redo.pdf"),
+    p1,
+    width = 100, height = 80, units = "mm",
+    device = cairo_pdf
+)
+```
+
+
+
+
+# Find if STR MSNs have different peaks for same genes vs. TEL GLUT
+
+OlfC_Glut, AMY_Glut, CTX_Glut, to the extent they sometimes enrich for genes
+also enriched in STR MSNs, maybe they have different peaks (eRegulons?) for 
+those genes...
+
+
+```{r}
+# exp=13.7-13.8
+subset(coenr_rna, grepl("STR_MSN", A) | grepl("STR_MSN", B)) %>% 
+    .[, !colnames(.) %in% c("samt_nt", "n", "pA", "pB", "expected_both")] %>% 
+    print.data.frame
+```
+
+```{r}
+subset(coenr_rna, grepl("STR_MSN", A) | grepl("STR_MSN", B)) %>% 
+    (function(x) {
+        region <- ifelse(x$A == "STR_MSN", x$region_B, x$region_A)
+        nt     <- ifelse(x$A == "STR_MSN", x$nt_B, x$nt_A)
+        data.frame(
+            region = region,
+            nt = nt,
+            same_region = ifelse(x$same_region, "YES", "."),
+            same_nt = ifelse(x$same_nt, "YES", "."), 
+            n = x$n,
+            pA = x$pA,
+            pB = x$pB,
+            n_both = x$n_both,
+            expected_both = x$expected_both,
+            enrichment = x$enrichment,
+            rank_overall = x$rank_overall
+        )
+    }) %>% 
+    .[, !colnames(.) %in% c("n", "pA", "pB")] %>% 
+    print.data.frame
+```
+
+```
+   region        nt same_region same_nt n_both expected_both enrichment rank_overall
+1     AMY       MSN           .     YES     98      13.76800 7.11795227           23
+2     STR      GABA         YES       .     96      13.77241 6.97045700           26
+3     AMY      GABA           .       .     60      13.76680 4.35831024           60
+4    OlfC      Glut           .       .     39      13.79201 2.82772407           98
+5    CLEn      Glut           .       .     31      13.79161 2.24774341          126
+6     AMY      Glut           .       .     28      13.79602 2.02957105          147
+7     HiF      Glut           .       .     20      13.79161 1.45015704          196
+8     CTX      Glut           .       .     19      13.79321 1.37748909          205
+9      BF      GABA           .       .     18      13.79201 1.30510342          216
+10    THM      GABA           .       .     11      13.77041 0.79881439          290
+11     HB      Glut           .       .     10      13.79161 0.72507852          305
+12    THM      Glut           .       .      9      13.76200 0.65397470          316
+13     MB      Dopa           .       .      8      13.76841 0.58104043          335
+14    HTH      GABA           .       .      7      13.76040 0.50870614          343
+15     GP      GABA           .       .      7      13.79161 0.50755496          352
+16    HTH Glut-GABA           .       .      5      13.75960 0.36338266          379
+17    HiF      GABA           .       .      5      13.76841 0.36315027          384
+18    STR      Chol         YES       .      5      13.77281 0.36303407          386
+19     GP      Chol           .       .      5      13.79321 0.36249713          393
+20     MB      GABA           .       .      4      13.76240 0.29064697          398
+21     BF      Glut           .       .      4      13.79762 0.28990502          409
+22    HTH      Glut           .       .      3      13.76000 0.21802326          419
+23     MB      Sero           .       .      3      13.76881 0.21788382          424
+24   OlfC      GABA           .       .      3      13.79281 0.21750460          425
+25     MB      Glut           .       .      2      13.76040 0.14534461          435
+26     MB Glut-GABA           .       .      1      13.76921 0.07262583          451
+27    EXA      GABA           .       .      1      13.79281 0.07250153          457
+28    CTX      GABA           .       .      0      13.76240 0.00000000          459
+29    EXA      Glut           .       .      0      13.79281 0.00000000          462
+30     GP Glut-GABA           .       .      0      13.79321 0.00000000          464
+```
+
+## (Check gene CRACDL)
+
+Fenna had found a PC enriched in MSNs and TEL GLUT and CRACDL was the gene with
+the highest loading on that PC.
+
+Few other genes in there as well
+
+```{r}
+lapply(dsres_rna, . %>%  .["CRACDL", "log2FoldChange_shr"]) %>% 
+    do.call(rbind, .) %>% 
+    as.data.frame %>% 
+    (function(x) {
+        x <- setNames(x, "enrichment")
+        x$region_nt <- rownames(x)
+        x
+    }) %>% 
+    arrange(desc(enrichment)) %>% 
+    mutate(
+        ., region_nt = factor(region_nt, levels = .$region_nt)
+    ) %>% 
+    ggplot(aes(region_nt, enrichment)) + 
+    geom_col(color = "black", fill = "gray75", linewidth = 0.25) + 
+    coord_flip() +
+    labs(title = "CRACDL") +
+    theme_md_classic()
+    
+```
+
+```{r}
+lapply(dsres_rna, . %>%  .["PTK2B", "log2FoldChange_shr"]) %>% 
+    do.call(rbind, .) %>% 
+    as.data.frame %>% 
+    (function(x) {
+        x <- setNames(x, "enrichment")
+        x$region_nt <- rownames(x)
+        x
+    }) %>% 
+    arrange(desc(enrichment)) %>% 
+    mutate(
+        ., region_nt = factor(region_nt, levels = .$region_nt)
+    ) %>% 
+    ggplot(aes(region_nt, enrichment)) + 
+    geom_col(color = "black", fill = "gray75", linewidth = 0.25) + 
+    coord_flip() +
+    labs(title = "PTK2B") +
+    theme_md_classic()
+    
+```
+
+```{r}
+lapply(dsres_rna, . %>%  .["SLIT3", "log2FoldChange_shr"]) %>% 
+    do.call(rbind, .) %>% 
+    as.data.frame %>% 
+    (function(x) {
+        x <- setNames(x, "enrichment")
+        x$region_nt <- rownames(x)
+        x
+    }) %>% 
+    arrange(desc(enrichment)) %>% 
+    mutate(
+        ., region_nt = factor(region_nt, levels = .$region_nt)
+    ) %>% 
+    ggplot(aes(region_nt, enrichment)) + 
+    geom_col(color = "black", fill = "gray75", linewidth = 0.25) + 
+    coord_flip() +
+    labs(title = "SLIT3") +
+    theme_md_classic()
+    
+```
+
+# (!) Rediscover a co-enrichment analysis...
+
+The previous one is bad in the sense that you get more "co-enrichment" when
+there's less specificity: MB & HTH mix together diverse cell types, so Glut &
+GABA enrichment LFCs are way lower than for other regions, and so they end up
+sharing more of their top quantiles.
+
+So it looks like MB & HTH have the "strongest regional fingerprint", when in
+reality they're the weakest...
+
+[I think maybe the peak specificity scoring thing might be a good analysis for
+this...]
+
+Or maybe 
+
+```{r}
+lapply(dsres_atac, function(x) sum(x$padj < 0.01))
+```
+
+
+# Find genes with multiple regulon peaks
+
+```{r}
+# > ereg_gn_counts <- table(ereg$Gene)
+# > ereg_pk_counts <- table(ereg$Region)
+# > summary(as.numeric(ereg_gn_counts))
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#    1.00    4.00    9.00   12.89   16.00  222.00 
+# 
+# > summary(as.numeric(ereg_pk_counts))
+#    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1.000   1.000   2.000   2.862   3.000  61.000 
+```
+
+Median of 9 peaks per gene (mean 12.9). 
+Median 2 genes per peak (mean 2.8(.))
+
+# Mine for examples of same gene, different peak
+
+```{r}
+pdir_mine <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/mine_ereg_region_nt"
+```
+
+
+To look for enrichment, use high ranks of shrunken LFCs.
+
+Inputs:
+
+```{r}
+## lists of DESeq2 enrichment results for each Region_NT for both RNA...
+# > names(dsres_rna)
+#  [1] "AMY_GABA"      "AMY_Glut"      "AMY_MSN"       "BF_GABA"       "BF_Glut"       "CLEn_Glut"     "CTX_GABA"     
+#  [8] "CTX_Glut"      "EXA_GABA"      "EXA_Glut"      "GP_Chol"       "GP_GABA"       "GP_Glut-GABA"  "HB_Glut"      
+# [15] "HiF_GABA"      "HiF_Glut"      "HTH_GABA"      "HTH_Glut"      "HTH_Glut-GABA" "MB_Dopa"       "MB_GABA"      
+# [22] "MB_Glut"       "MB_Glut-GABA"  "MB_Sero"       "OlfC_GABA"     "OlfC_Glut"     "STR_Chol"      "STR_GABA"     
+# [29] "STR_MSN"       "THM_GABA"      "THM_Glut" 
+
+## ...and ATAC:
+# > identical(names(dsres_rna), names(dsres_atac))
+# [1] TRUE
+
+# > dsres_rna$AMY_GABA[503:505, ] %>% print.data.frame
+#               baseMean log2FoldChange     lfcSE       stat    pvalue      padj log2FoldChange_shr lfcSE_shr
+# SERPINE3      2.855065    -0.11996502 0.1544466 -0.7767413 0.4373114 0.5631953        -0.09890310 0.1382459
+# LOC118153124  7.990837    -0.04803019 0.1129259 -0.4253249 0.6705998 0.7634222        -0.04504907 0.1056063
+# FAM124A      34.719624     0.15382167 0.1812134  0.8488428 0.3959688 0.5232781         0.11440522 0.1577437
+
+## log2FoldChange_shr is apeglm shrunken log2FoldChange
+## -> use highest ranked values of this as good measure of enrichment
+
+# > dsres_atac$AMY_GABA[1:3, ] %>% print.data.frame
+#                    baseMean log2FoldChange     lfcSE       stat    pvalue      padj log2FoldChange_shr lfcSE_shr
+# chr1:135544-136045 1.018669     0.02812162 0.3275386 0.08585742 0.9315798 0.9521035         0.02465752 0.2573377
+# chr1:167473-167974 9.196521     0.10781065 0.1078810 0.99934826 0.3176260 0.4222814         0.10097327 0.1044418
+# chr1:262780-263281 2.905842     0.24729669 0.2187853 1.13031654 0.2583429 0.3587531         0.19667466 0.2025760
+
+
+## a large table of eRegulons linking peaks (rownames dsres_atac dataframes) 
+## and genes (rownames in dsres_rna dataframes)
+
+# > nrow(ereg)
+# [1] 171128
+
+# > ereg[1:3, ] %>% print.data.frame
+#                     Region   Gene importance_R2G    rho_R2G importance_x_rho importance_x_abs_rho   TF is_extended
+# 1 chr5:135417727-135418228  PSPC1     0.01869581 0.09148575       0.00171040           0.00171040 ADNP       False
+# 2  chr22:37851491-37851992 CLASRP     0.01975477 0.08738445       0.00172626           0.00172626 ADNP       False
+# 3  chr12:89625022-89625523 ERLIN1     0.06338035 0.08413996       0.00533282           0.00533282 ADNP       False
+#     eRegulon_name    Gene_signature_name  Region_signature_name importance_TF2G regulation  rho_TF2G
+# 1 ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.6529321          1 0.4964991
+# 2 ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.3945265          1 0.2088355
+# 3 ADNP_direct_+/+ ADNP_direct_+/+_(432g) ADNP_direct_+/+_(606r)       0.5516774          1 0.2462354
+```
+
+## Create long tables
+
+```{r}
+library(tibble)
+```
+
+
+```{r}
+# RNA: gene x Region_NT
+rna_long <- bind_rows(lapply(
+    names(dsres_rna), \(ct)
+    dsres_rna[[ct]] %>%
+        rownames_to_column("Gene") %>%
+        transmute(
+            Gene, Region_NT = ct,
+            lfc_rna = log2FoldChange_shr,
+            padj_rna = padj
+        )
+))
+
+# ATAC: peak x Region_NT
+atac_long <- bind_rows(lapply(
+    names(dsres_atac), \(ct)
+    dsres_atac[[ct]] %>%
+        rownames_to_column("Peak") %>%
+        transmute(
+            Peak, Region_NT = ct,
+            lfc_atac = log2FoldChange_shr,
+            padj_atac = padj
+        )
+))
+
+# eReg links (peak–gene–TF), keep direct/extended and weights
+links <- ereg %>%
+    subset(sub(".*_", "", eRegulon_name) == "+/+") %>% 
+    transmute(
+        Peak = Region, Gene, TF, 
+        is_extended = as.logical(is_extended),
+        w_region2gene = importance_R2G,
+        rho_region2gene = rho_R2G,
+        w_tf2gene = importance_TF2G,
+        rho_tf2gene = rho_TF2G,
+        eRegulon_name
+    )
+```
+
+
+## Rank the shr LFCs
+
+```{r}
+rank_scale <- function(x) qnorm((rank(x, ties.method="average")-0.5)/length(x))
+rna_long <- rna_long %>% 
+    group_by(Region_NT) %>% 
+    mutate(rna_rank = rank_scale(lfc_rna)) %>% 
+    ungroup()
+atac_long <- atac_long %>% 
+    group_by(Region_NT) %>% 
+    mutate(atac_rank = rank_scale(lfc_atac)) %>% 
+    ungroup()
+```
+
+## Join with ereg table
+
+```{r}
+# Join peak–gene links with per-ct RNA & ATAC
+pgct <- links %>%
+  inner_join(atac_long, by = "Peak") %>%
+  inner_join(rna_long,  by = c("Gene","Region_NT"))
+```
+
+```{r}
+pgct
+```
+
+
+## Define support for peak->gene in Region_NT
+
+Composite support score that peak drives a gene in that Region_NT. Combine:
+
+gene enrichment (lfc_rna, padj_rna, or rna_rank)
+peak enrichment (lfc_atac, padj_atac, or atac_rank)
+eReg evidence (direct vs extended; importance / rho; TF->gene score)
+
+$$
+Support_{p,g,ct} = A x RNA + B × ATAC + C × eReg
+$$
+
+I guess I'll do a rank-based scoring of the RNA and ATAC
+
+```
+RNA_term  = max(0, rna_rank)            # only positive direction
+ATAC_term = max(0, atac_rank)
+eReg_term = log1p(w_region2gene) + 0.5*log1p(w_tf2gene) + 0.5*abs(rho_region2gene)
+
+Weights: A=1, B=1, C=1  (start equal; tune later)
+Penalty: if is_extended==TRUE, multiply eReg_term by 0.7 (or +offset for direct)
+Bonus: if eRegulon_name contains "_+/+", add small bonus (e.g., +0.2)
+```
+
+I'm just going to roll with this but I think more needs to be done to check
+how much sense the eReg term makes...
+
+```{r}
+# also for ranks (RNA & ATAC), cap extremes so outliers don't dominate 
+cap <- function(x, lo=-2.5, hi=2.5) {
+    pmin(pmax(x, lo), hi)
+}
+
+pgct <- pgct %>%
+    mutate(
+        rna_rank  = cap(rna_rank), 
+        atac_rank = cap(atac_rank),
+        RNA_term  = pmax(0, rna_rank),
+        ATAC_term = pmax(0, atac_rank)
+    ) %>% 
+    # z-score within gene
+    group_by(Gene) %>%
+    mutate(
+        z_wR2G   = scale(w_region2gene)[,1],
+        z_wTF2G  = scale(w_tf2gene)[,1],
+        z_absRho = scale(abs(rho_region2gene))[,1]
+    ) %>%
+    ungroup() %>% 
+    mutate(
+        dir_ok    = (lfc_rna >= 0) & (rho_region2gene >= 0) & (rho_tf2gene >= 0),
+        eReg_raw  = z_wR2G + 0.5*z_wTF2G + 0.5*z_absRho,
+        eReg_term = ifelse(is_extended, 0.5*eReg_raw, 1.0*eReg_raw),
+        Support   = RNA_term + ATAC_term + eReg_term
+    )
+
+# I'm undecided if should scale within each gene (to prevent many peaks genes
+# from being inflated... maybe we like those genes?)
+pgct <- pgct %>%
+    group_by(Gene) %>%
+    mutate(Support_gz = scale(Support)[,1]) %>%
+    ungroup()
+```
+
+## Filter for actual enrichment
+
+Looking at the plots, I think shr LFC >1 is pretty safe for a final cutoff.
+
+But actually might be aggressive before modeling...
+
+```{r}
+# > nrow(pgct)
+# [1] 2933313
+pgct <- subset(pgct, lfc_atac > 0.3 & lfc_rna > 0.3)
+# > nrow(pgct)
+# [1] 193732
+```
+
+## Pick dominant enhancer per gene, RegionNT
+
+```{r}
+# keep runner up if within 15%, cuz i don't want to be too hard with these
+# kind of vague metrics
+# top_k <- pgct %>%
+#     group_by(Gene, Region_NT) %>%
+#     arrange(desc(Support_gz)) %>%
+#     mutate(
+#         rank_ct = row_number(),
+#         best    = first(Support_gz),
+#         within15 = Support_gz >= 0.85*best
+#     ) %>%
+#     filter(rank_ct == 1 | within15) %>%
+#     ungroup()
+# 
+# # choice margin & atac specificity metrics i'll use later
+# top_pgct <- top_k %>%
+#     group_by(Gene, Region_NT) %>%
+#     arrange(desc(Support_gz)) %>%
+#     mutate(
+#         choice_margin = Support_gz[1] - dplyr::lag(Support_gz, default = Support_gz[1]-0),
+#         choice_margin = ifelse(row_number()==1, choice_margin, NA_real_)
+#     ) %>%
+#     filter(row_number()==1) %>%
+#     ungroup()
+
+
+# umm i messed up choice...
+
+
+top2_pgct <- pgct %>%
+    dplyr::group_by(Gene, Region_NT) %>%
+    dplyr::arrange(
+        dplyr::desc(Support_gz),
+        dplyr::desc(ATAC_term),
+        dplyr::desc(eReg_raw),
+        .by_group = TRUE
+    ) %>%
+    dplyr::slice_head(n = 2) %>%
+    dplyr::mutate(rank_ct = dplyr::row_number()) %>%
+    dplyr::ungroup()
+
+# summarise to one chosen row + 2nd-best info & margin + within15% flag
+top_pgct <- top2_pgct %>%
+    dplyr::group_by(Gene, Region_NT) %>%
+    dplyr::summarise(
+        Peak         = dplyr::first(Peak),
+        TF           = dplyr::first(TF),
+        is_extended  = dplyr::first(is_extended),
+        Support_gz_1 = dplyr::first(Support_gz),
+        Support_gz_2 = dplyr::first(Support_gz[rank_ct == 2], default = NA_real_),
+        Peak_2       = dplyr::first(Peak[rank_ct == 2],       default = NA_character_),
+        choice_margin = Support_gz_1 - dplyr::coalesce(Support_gz_2, Support_gz_1),
+        # runner-up is within 15% of the top (i.e., ambiguous choice)
+        within15 = !is.na(Support_gz_2) & (Support_gz_2 >= 0.85 * Support_gz_1),
+        .groups = "drop"
+    ) %>%
+    # add back RNA/ATAC & p-values for the chosen (Peak, Gene, Region_NT)
+    dplyr::left_join(
+        pgct %>%
+            dplyr::select(Gene, Region_NT, Peak, lfc_rna, padj_rna, lfc_atac, padj_atac, rna_rank, atac_rank) %>%
+            dplyr::distinct(),
+        by = c("Gene", "Region_NT", "Peak")
+    )
+
+# choice margin = gap b/w 1 and 2
+# and 'Peak_2' maintainted
+
+
+
+### how exclusive is atac peak to its "home" cell type?
+
+# Which (Peak, Region_NT) pairs are "home" (i.e., chosen)
+homes <- top_pgct %>%
+    dplyr::select(Peak, Region_NT) %>%
+    dplyr::distinct() %>%
+    dplyr::rename(home_ct = Region_NT)
+
+# Join ATAC LFCs for all Region_NT to those homes,
+# then compute home vs others within each (Peak, home_ct)
+atac_home_vs_others <- atac_long %>%
+    dplyr::inner_join(homes, by = "Peak") %>%   # <---- adds home_ct column
+    dplyr::group_by(Peak, home_ct) %>%
+    dplyr::summarize(
+        lfc_home = {
+            v <- lfc_atac[Region_NT == home_ct]
+            if (length(v) == 0) NA_real_ else v[1]  # should be length 1
+        },
+        max_else = {
+            v <- lfc_atac[Region_NT != home_ct]
+            if (all(is.na(v)) || length(v) == 0) -Inf else max(v, na.rm = TRUE)
+        },
+        atac_specificity = lfc_home - max_else, # <------ neg values mean peak not unique to that ct
+        .groups = "drop"
+    )
+
+
+top_pgct <- left_join(
+    top_pgct, 
+    atac_home_vs_others, 
+    by = c("Peak" = "Peak", "Region_NT" = "home_ct")
+)
+```
+
+```{r}
+top_pgct
+```
+
+## Call AEU across cell types
+
+Alternative Enhancer Usage
+
+For a gene to be an AEU candidate, it must:
+1. Be RNA-enriched in >=2 Region_NT groups
+2. The chosen peak differs between at least two of those groups
+3. Each chosen peak shows ATAC enrichment in its respective group (or good support score).
+
+```{r}
+# Cell types where gene is RNA-enriched
+# rna_enriched <- rna_long %>%
+#     filter(padj_rna <= 0.05, lfc_rna >= 1) %>%
+#     select(Gene, Region_NT)
+# 
+# # Join to chosen peaks
+# aeu_candidates <- top_pgct %>%
+#     semi_join(rna_enriched, by=c("Gene","Region_NT")) %>%
+#     group_by(Gene) %>%
+#     summarize(
+#         n_ct = n(),
+#         peaks = list(Peak),
+#         cts   = list(Region_NT)
+#     ) %>%
+#     filter(n_ct >= 2) %>%     # co-enriched genes
+#     rowwise() %>%
+#     mutate(n_unique_peaks = length(unique(peaks))) %>%
+#     ungroup() %>%
+#     filter(n_unique_peaks >= 2)  # different enhancers used
+
+
+aeu_candidates <- top_pgct %>%
+    semi_join(
+        rna_long %>% filter(padj_rna <= 0.05, lfc_rna >= 0.5),
+        by=c("Gene","Region_NT")
+    ) %>%
+    group_by(Gene) %>%
+    mutate(
+        n_ct = n(),
+        n_unique_peaks = n_distinct(Peak)
+    ) %>%
+    ungroup() %>%
+    filter(n_ct >= 2, n_unique_peaks >= 2)
+
+```
+
+Gives gene-level AEU calls and which peaks were selected in which cell types.
+
+```{r}
+aeu_candidates
+```
+
+
+## Attribute AEU to NT vs Region
+
+Split up NT and region.
+
+For each gene, which peak was chosen in each cell type?
+
+Two ides:
+
+1) Association test
+
+Contingency table (peak choice x NT or choice x region) for Fisher's exact
+(and permutation across region_nt)
+
+Also Cramer's V effect size (NT vs region per gene)
+
+2) Mixed model/multinomial
+
+peak_choice ~ NT + region (+NT:region? does that work?)
+
+
+```{r}
+# parse Region & NT
+top_pgct <- top_pgct %>%
+    tidyr::separate(Region_NT, c("Region","NT"), sep="_", remove=FALSE)
+
+# AEU genes often have >2 peaks; collapse to top K distinct peaks per gene 
+# (K=2–3), or cluster peaks per gene by genomic proximity (e.g., within 5–10 kb) 
+# or by ATAC profile correlation across cts, then label clusters.
+
+### -> maybe skip for now...
+
+```
+
+```{r}
+top_pgct$Gene %>% table %>% hist(breaks=20)
+```
+
+### Association test
+
+(effect size + permutation p)
+
+For each gene with ≥2 peak clusters and ≥3 cell types:
+
+```{r}
+by_gene <- split(top_pgct, top_pgct$Gene)
+assoc_results <- lapply(by_gene, function(df) {
+    if (dplyr::n_distinct(df$Peak) < 2 || nrow(df) < 3) return(NULL)
+    tab_nt  <- table(df$Peak, df$NT)
+    tab_reg <- table(df$Peak, df$Region)
+    # Cramer's V
+    V_nt  <- DescTools::CramerV(tab_nt, bias.correct=TRUE)
+    V_reg <- DescTools::CramerV(tab_reg, bias.correct=TRUE)
+    # Permutation p-values (shuffle NT/Region labels within gene)
+    perm_p <- function(tab, labels) {
+        obs <- DescTools::CramerV(tab, bias.correct=TRUE)
+        B <- 1000
+        vals <- replicate(B, {
+            lab2 <- sample(labels)
+            DescTools::CramerV(table(df$Peak, lab2), bias.correct=TRUE)
+        })
+        mean(vals >= obs)
+    }
+    p_nt  <- perm_p(tab_nt,  df$NT)
+    p_reg <- perm_p(tab_reg, df$Region)
+    data.frame(Gene=unique(df$Gene), V_nt=V_nt, p_nt=p_nt, V_reg=V_reg, p_reg=p_reg)
+})
+assoc_results <- dplyr::bind_rows(assoc_results)
+```
+
+```{r}
+write.csv(assoc_results, file.path(pdir_mine, "assoc_results.csv"))
+```
+
+Label:
+
+NT-driven if p_nt <= 0.05 and (V_nt > V_reg or p_reg > 0.1)
+Region-driven if the opposite
+Both if both significant and similar V
+Neither otherwise.
+
+#### Find genes
+
+```{r}
+cand_aeu_by_nt <- subset(assoc_results, p_nt < 0.05 & V_nt > V_reg)$Gene
+```
+
+```{r}
+cand_aeu_by_reg <- subset(assoc_results, p_reg < 0.05 & V_reg > V_nt)$Gene
+```
+
+```{r}
+# > length(cand_aeu_by_nt)
+# [1] 31
+# > length(cand_aeu_by_reg)
+# [1] 31
+```
+
+```{r}
+print.data.frame(by_gene[[cand_aeu_by_nt[1]]])
+```
+
+
+### Summary function for region vs. nt association
+
+independent of the association test which is slow and weak
+
+```{r}
+summarize_gene <- function(g) {
+    df <- top_pgct %>%
+        filter(Gene == g) %>%
+        tidyr::separate(Region_NT, c("Region","NT"), sep="_", remove=FALSE)
+    
+    if (nrow(df) == 0) return(NULL)
+    
+    # 2A. collapse at the chosen peak per ct (already done), compute helpful shares
+    # NT/Region distribution per peak (weighted by Support_gz_1)
+    mix_nt <- df %>%
+        group_by(Peak, NT) %>%
+        summarise(w = sum(Support_gz_1, na.rm=TRUE), .groups="drop_last") %>%
+        mutate(nt_share = w / sum(w)) %>%
+        ungroup()
+    
+    mix_reg <- df %>%
+        group_by(Peak, Region) %>%
+        summarise(w = sum(Support_gz_1, na.rm=TRUE), .groups="drop_last") %>%
+        mutate(region_share = w / sum(w)) %>%
+        ungroup()
+    
+    # 2B. NT- and Region- association “confidence” per peak via entropy (lower = more specific)
+    shannon <- function(p) { p <- p[p>0]; if(!length(p)) return(NA_real_); -sum(p*log(p)) }
+    spec_index <- function(p) 1 - shannon(p) / log(length(p))  # 0..1; 1=perfectly specific
+    
+    nt_spec <- mix_nt %>% group_by(Peak) %>% summarise(NT_specificity = spec_index(nt_share), .groups="drop")
+    reg_spec <- mix_reg %>% group_by(Peak) %>% summarise(Region_specificity = spec_index(region_share), .groups="drop")
+    
+    # 2C. pick the dominant NT and Region per peak (by share)
+    nt_dom <- mix_nt %>%
+        group_by(Peak) %>% slice_max(nt_share, n=1, with_ties=FALSE) %>%
+        transmute(Peak, NT_dom=NT, NT_dom_share=nt_share)
+    rg_dom <- mix_reg %>%
+        group_by(Peak) %>% slice_max(region_share, n=1, with_ties=FALSE) %>%
+        transmute(Peak, Region_dom=Region, Region_dom_share=region_share)
+    
+    # 2D. bring TF info (if a peak had different TFs across cts, list unique)
+    tfs <- df %>% group_by(Peak) %>%
+        summarise(
+            TF_direct = paste(sort(unique(TF[!is_extended])), collapse=";"),
+            TF_all    = paste(sort(unique(TF)), collapse=";"),
+            any_extended = any(is_extended),
+            mean_choice_margin = mean(choice_margin, na.rm=TRUE),
+            mean_atac_spec = mean(atac_specificity, na.rm=TRUE),
+            n_ct = n(),
+            n_regions = n_distinct(Region),
+            n_nts = n_distinct(NT),
+            .groups="drop"
+        )
+    
+    out <- tfs %>%
+        left_join(nt_spec, by="Peak") %>%
+        left_join(reg_spec, by="Peak") %>%
+        left_join(nt_dom, by="Peak") %>%
+        left_join(rg_dom, by="Peak") %>%
+        arrange(desc(mean_atac_spec), desc(mean_choice_margin))
+    
+    # 2E. light labels per peak: NT-locked / Region-locked / Mixed
+    out <- out %>%
+        mutate(
+            Peak_label = dplyr::case_when(
+                NT_specificity >= 0.6  & NT_dom_share >= 0.6  & mean_atac_spec >= 0.5 ~ "NT-locked",
+                Region_specificity >= 0.6 & Region_dom_share >= 0.6 & mean_atac_spec >= 0.5 ~ "Region-locked",
+                TRUE ~ "Mixed/Weak"
+            )
+        )
+    
+    list(
+        per_ct = df %>% arrange(desc(Support_gz_1)),
+        per_peak = out
+    )
+}
+
+```
+
+example (first "NT" candidate):
+
+```{r}
+res_g <- summarize_gene("ABLIM2")  # use the exact symbol as in your tables (here ABLIM2)
+res_g$per_ct   # rows per Region_NT (winner peak)
+res_g$per_peak # rows per peak (aggregate, with labels)
+```
+
+#### Get gene-level calls
+
+
+Combine with association test results, prefer the more conservative label:
+- If assoc says NT and per-peak says Region -> “Both” (or “Ambiguous”),
+- If both say NT -> NT, etc.
+
+```{r}
+gn_sum_all <- lapply(names(by_gene), summarize_gene)
+names(gn_sum_all) <- names(by_gene) 
+```
+
+```{r}
+gn_sum_all[[1]]
+```
+
+```{r}
+all_gn_from_pk <- bind_rows(lapply(gn_sum_all, function(x) {
+    g <- unique(x$per_ct)$Gene
+    pk <- x$per_peak
+    n_nt_locked  <- sum(pk$Peak_label == "NT-locked")
+    n_reg_locked <- sum(pk$Peak_label == "Region-locked")
+    
+    lab <- dplyr::case_when(
+        n_nt_locked  >= 1 & n_reg_locked == 0 ~ "NT-driven",
+        n_reg_locked >= 1 & n_nt_locked == 0 ~ "Region-driven",
+        n_nt_locked  >= 1 & n_reg_locked >= 1 ~ "Both",
+        TRUE ~ "Neither/Mixed"
+    )
+    data.frame(
+        Gene = g, Label = lab,
+        n_nt_locked = n_nt_locked, n_reg_locked = n_reg_locked
+    )
+}))
+```
+
+```{r}
+table(all_gn_from_pk$Label)
+```
+
+
+
+#### Filter
+
+Apply these to res_g$per_peak (or to all genes in batch):
+ATAC exclusivity: mean_atac_spec ≥ 0.5 (or ≥ 0.7 for Tier 1).
+Decision strength: mean_choice_margin ≥ 0.5 z-units.
+NT specificity: NT_specificity ≥ 0.6 and NT_dom_share ≥ 0.6.
+(Analogous rules for Region specificity.)
+
+Direct evidence bonus: prefer peaks with any TF_direct; require at least one direct for Tier 1.
+
+Then summarize per gene
+
+
+Maybe little change
+
+
+```{r}
+# get genes that have multiple direct TFs
+sapply(gn_sum_all, function(x) x$per_peak$TF_direct %>% .[.!=""] %>% unique %>% length) %>% 
+    .[. > 1] %>% 
+    names ->
+    gns_multi_direct_tf
+
+# > length(gns_multi_direct_tf)
+# [1] 2103
+```
+
+```{r}
+gn_sum_all[[gns_multi_direct_tf[1]]]
+```
+
+```{r}
+gn_sum_all_filt <- lapply(gn_sum_all[gns_multi_direct_tf], function(x) {
+    x$per_peak <- subset(x$per_peak, TF_direct != "")
+    x$per_ct <- subset(x$per_ct, Peak %in% x$per_peak$Peak)
+    x
+})
+```
+
+```{r}
+gn_sum_all_filt[1]
+```
+
+So there's an example, first gene, "ABCB1", 2 peaks, 2 TFs, one is specific to
+HiF-Glut.
+
+How many peaks per gene?
+
+```{r}
+# > sapply(gn_sum_all_filt, function(x) nrow(x$per_peak)) %>% table
+#    2    3    4    5 
+# 1494  502   92   15 
+```
+
+How many TFs per gene?
+
+```{r}
+# > sapply(gn_sum_all_filt, function(x) length(unique(x$per_peak$TF_direct))) %>% table
+#    2    3    4    5 
+# 1816  263   23    1 
+```
+
+```{r}
+gn_sum_all_filt["CRACDL"]
+```
+
+
+
+##### Genewise
+
+### Multinomial model
+
+```{r}
+library(nnet)
+multinom_results <- lapply(by_gene, function(df) {
+    if (dplyr::n_distinct(df$Peak) < 2 || nrow(df) < 8) return(NULL)
+    df$Peak <- droplevels(factor(df$Peak))
+    m_nt   <- try(multinom(Peak ~ NT, data=df, trace=FALSE), silent=TRUE)
+    m_reg  <- try(multinom(Peak ~ Region, data=df, trace=FALSE), silent=TRUE)
+    m_both <- try(multinom(Peak ~ NT + Region, data=df, trace=FALSE), silent=TRUE)
+    if (inherits(m_nt, "try-error") || inherits(m_reg, "try-error") || inherits(m_both, "try-error")) return(NULL)
+    AICs <- c(NT=AIC(m_nt), Region=AIC(m_reg), Both=AIC(m_both))
+    data.frame(Gene=unique(df$Gene), AIC_NT=AICs[1], AIC_Region=AICs[2], AIC_Both=AICs[3])
+})
+multinom_results <- dplyr::bind_rows(multinom_results)
+
+```
+
+I don't think a good idea.
+
+
+
+### TF Context for AEU
+
+If switch involves different TFs (and whether at least 1 is direct).
+
+This is really what I want.
+
+```{r}
+aeu_tf <- top_pgct %>%
+    select(Gene, Region_NT, Peak, TF, is_extended) %>%
+    group_by(Gene, Region_NT, Peak) %>%
+    summarize(
+        TF_direct = paste(sort(unique(TF[!is_extended])), collapse=";"),
+        TF_all    = paste(sort(unique(TF)), collapse=";"),
+        .groups="drop"
+    )
+
+# per gene summary
+tf_switch <- aeu_tf %>%
+    group_by(Gene) %>%
+    summarize(
+        n_peaks = n_distinct(Peak),
+        n_TF_direct_sets = n_distinct(TF_direct),
+        TF_switch_direct = n_TF_direct_sets > 1
+    )
+```
+
+

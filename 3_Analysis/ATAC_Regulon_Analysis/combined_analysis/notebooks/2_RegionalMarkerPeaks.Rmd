@@ -1,0 +1,780 @@
+---
+title: "2_RegionalMarkerPeaks"
+output: html_document
+date: "2025-10"
+---
+
+
+# Find cluster indices for various sets
+
+```{r}
+stopifnot(all(rownames(obs) == colnames(atac_by_cl_raw)))
+cl_idx_rgnt <- split(seq_len(nrow(obs)), obs$RegionNT)
+cl_idx_rg   <- split(seq_len(nrow(obs)), obs$Cluster_Dominant_Region)
+cl_idx_nt   <- split(seq_len(nrow(obs)), obs$NT_MSN)
+```
+
+```{r}
+all_rgnt <- names(cl_idx_rgnt)
+all_rg   <- names(cl_idx_rg)
+all_nt   <- names(cl_idx_nt)
+```
+
+```{r}
+# > all_rgnt
+#  [1] "_"               "AMY_GABA"        "AMY_Glut"        "AMY_MSN"         "BF_GABA"         "BF_Glut"        
+#  [7] "BF_Glut-GABA"    "CLEn_Glut"       "CTX_GABA"        "CTX_Glut"        "EXA_GABA"        "EXA_Glut"       
+# [13] "GP_Chol"         "GP_GABA"         "GP_Glut-GABA"    "HB_Glut"         "HB_Glut-GABA"    "HiF_GABA"       
+# [19] "HiF_Glut"        "HTH_GABA"        "HTH_Glut"        "HTH_Glut-GABA"   "HTH_Hist"        "MB_Dopa"        
+# [25] "MB_GABA"         "MB_GABA-Glyc"    "MB_Glut"         "MB_Glut-GABA"    "MB_Sero"         "Multi_GABA"     
+# [31] "Multi_Glut"      "Multi_Glut-GABA" "Multi_MSN"       "OlfC_GABA"       "OlfC_Glut"       "STR_Chol"       
+# [37] "STR_GABA"        "STR_MSN"         "THM_Chol"        "THM_GABA"        "THM_Glut" 
+
+# > all_rg
+#  [1] ""      "AMY"   "BF"    "CLEn"  "CTX"   "EXA"   "GP"    "HB"    "HiF"   "HTH"   "MB"    "Multi" "OlfC"  "STR"  
+# [15] "THM" 
+
+# > all_nt
+#  [1] ""          "Chol"      "Dopa"      "GABA"      "GABA-Glyc" "Glut"      "Glut-GABA" "Hist"      "MSN"      
+# [10] "Sero"   
+```
+
+
+# "Useable Regions" For GABA/Glut sharing analysis
+
+Regions with both "GABA" and "Glut" clusters.
+
+```{r}
+split(sub(".*_", "", all_rgnt), sub("_.*", "", all_rgnt)) %>% 
+    lapply(function(x) all(c("Glut", "GABA") %in% x)) %>% 
+    .[unlist(.)] %>% 
+    names %>% 
+    setdiff("Multi") ->
+    useable_regions
+
+# > useable_regions
+# [1] "AMY"  "BF"   "CTX"  "EXA"  "HiF"  "HTH"  "MB"   "OlfC" "THM" 
+```
+
+
+# [RERUN!] Specificity analysis (non-DESeq2)
+
+```{r}
+pdir_peak_spec <- file.path(pdir_plots, "RegionalPeaksBySpecificity")
+if (!dir.exists(pdir_peak_spec))
+    dir.create(pdir_peak_spec)
+```
+
+
+## Specificity calculations
+
+sums are the total sum of the cluster-level CPM values for that peak, so these
+values are weighted by balance of clusters (so if there were 3 GABA clusters to
+every Glut, GABA peaks would have higher sums). 
+
+this is appropriate because we're only interested in how those total sums are 
+partitioned among different groupings of clusters.
+
+first, total sums for each peak:
+(only needed if every doing sums not using all the clusters, which as of now
+I don't think I'm doing anymore...)
+
+```{r}
+peak_sums <- rowSums(atac_by_cl_cpm)
+```
+
+utility function: rev-rank (so 1 is the highest)
+
+```{r}
+# ranks so that 1 is the highest value:
+# > rank(1:5)
+# [1] 1 2 3 4 5
+# > rev_rank(1:5)
+# [1] 5 4 3 2 1
+rev_rank <- function(x) {
+    rk <- rank(x)
+    max(rk) + 1 - rk
+}
+```
+
+#### IMPORTANT CHECK FOR REVERSE RANKS
+
+Seems more convenient, but I MIGHT GET DIFFERENT PEAKS!
+
+No guarantee that maximizing rank(A)+rank(B) = minimizing rrank(A)+rrank(B) !!
+
+### For Region+NT
+
+next, the sum of those counts found in each RegionNT, and the fraction (the
+specificity).
+
+```{r}
+# all outputs here are peak-by-RegionNT matrices:
+
+# total sum of normalized counts for each peak in each rgnt
+peak_sums_rgnt <- sapply(cl_idx_rgnt, function(i) rowSums(atac_by_cl_cpm[, i, drop=FALSE]))
+
+# fraction of that peak's total found in each rgnt
+peak_frac_rgnt <- peak_sums_rgnt / peak_sums
+
+# and the rev_rank of each peak for specificity in each rgnt (1 being most specific)
+rrank_peak_frac_rgnt <- apply(peak_frac_rgnt, 2, rev_rank)
+
+# also use regular ranks (which I had used before for finding regional peaks
+# shared across NTs) [so 1 is least specific peak]
+rank_peak_frac_rgnt <- apply(peak_frac_rgnt, 2, rank)
+```
+
+```{r}
+## because using all clusters, same as peak_sums
+# > max(rowSums(peak_sums_rgnt) - peak_sums)
+# [1] 1.455192e-11
+```
+
+
+### For Region
+
+```{r}
+peak_sums_rg <- sapply(cl_idx_rg, function(i) rowSums(atac_by_cl_cpm[, i, drop=FALSE]))
+peak_frac_rg <- peak_sums_rg / peak_sums
+rrank_peak_frac_rg <- apply(peak_frac_rg, 2, rev_rank)
+```
+
+### For NT
+
+```{r}
+peak_sums_nt <- sapply(cl_idx_nt, function(i) rowSums(atac_by_cl_cpm[, i, drop=FALSE]))
+peak_frac_nt <- peak_sums_nt / peak_sums
+rrank_peak_frac_nt <- apply(peak_frac_nt, 2, rev_rank)
+```
+
+
+## Summarize specificity metric [ugh]
+
+It is effectively "median specificity of the top 2000 most specific peaks", 
+which is the same as saying the specificity of the 1000th most specific peak.
+
+I checked various numbers (like 1e2, 1e3, 1e4) and the relationship is linear
+so it doesn't really matter which is used (unless some other calculations are
+done using it).
+
+But overall, it's the tendancy for peaks to be found only in that group
+
+### For Region+NT
+
+tabulated into a df for all peaks:
+
+```{r}
+rgnt_pk_spec <- left_join(
+    reshape2::melt(
+        peak_frac_rgnt, 
+        varnames = c("peak", "RegionNT"), 
+        value.name = "spec"
+    ),
+    reshape2::melt(
+        rrank_peak_frac_rgnt, 
+        varnames = c("peak", "RegionNT"), 
+        value.name = "rev_rank_spec"
+    ),
+    by = c("peak", "RegionNT")
+)
+```
+
+```{r}
+# > print.data.frame(rgnt_pk_spec[1e6:(1e6+6),])
+#                            peak RegionNT       spec rev_rank_spec
+# 1000000 chr11:64880671-64881172 AMY_GABA 0.02516037        285993
+# 1000001 chr11:64883638-64884139 AMY_GABA 0.03158493        151668
+# 1000002 chr11:64890965-64891466 AMY_GABA 0.03622116         84628
+# 1000003 chr11:64889585-64890086 AMY_GABA 0.03507233         96829
+# 1000004 chr11:64894584-64895085 AMY_GABA 0.01677949        416319
+# 1000005 chr11:64898161-64898662 AMY_GABA 0.02210479        343195
+# 1000006 chr11:64898813-64899314 AMY_GABA 0.02480391        293102
+```
+
+and the summary metric:
+
+```{r}
+summary_rgnt_pk_spec <- rgnt_pk_spec %>% 
+    filter(rev_rank_spec == 1e3) %>% 
+    arrange(desc(spec)) %>% 
+    mutate(
+        Region = sub("_.*", "", RegionNT),
+        NT = sub(".*_", "", RegionNT)
+    ) %>% 
+    select(Region, NT, RegionNT, spec) %>% 
+    filter(
+        Region != "",
+        NT != "",
+        NT != "Junk",
+        Region != "Multi"
+    )
+
+# > print.data.frame(summary_rgnt_pk_spec)
+#    Region        NT      RegionNT        spec
+# 1     THM      Glut      THM_Glut 0.633375122
+# 2     STR       MSN       STR_MSN 0.476099114
+# 3     CTX      Glut      CTX_Glut 0.378986148
+# 4      BF      GABA       BF_GABA 0.280335631
+# 5      MB      GABA       MB_GABA 0.280213006
+# 6     HiF      Glut      HiF_Glut 0.268433447
+# 7     AMY      Glut      AMY_Glut 0.222507235
+# 8      MB      Glut       MB_Glut 0.198455238
+# 9     THM      GABA      THM_GABA 0.183591429
+# 10    HTH      Glut      HTH_Glut 0.171252767
+# 11   CLEn      Glut     CLEn_Glut 0.134165155
+# 12    AMY      GABA      AMY_GABA 0.123088680
+# 13    CTX      GABA      CTX_GABA 0.121083160
+# 14     MB      Dopa       MB_Dopa 0.118400079
+# 15    HTH      GABA      HTH_GABA 0.105192087
+# 16    STR      GABA      STR_GABA 0.099321587
+# 17     HB      Glut       HB_Glut 0.078374805
+# 18    HiF      GABA      HiF_GABA 0.076661363
+# 19     BF      Glut       BF_Glut 0.071998025
+# 20    HTH Glut-GABA HTH_Glut-GABA 0.067363376
+# 21   OlfC      Glut     OlfC_Glut 0.058627836
+# 22    EXA      Glut      EXA_Glut 0.048047410
+# 23    AMY       MSN       AMY_MSN 0.043146244
+# 24     GP      GABA       GP_GABA 0.038914650
+# 25     GP Glut-GABA  GP_Glut-GABA 0.022866695
+# 26     MB      Sero       MB_Sero 0.021898267
+# 27    STR      Chol      STR_Chol 0.016377778
+# 28     GP      Chol       GP_Chol 0.016271662
+# 29    EXA      GABA      EXA_GABA 0.015505866
+# 30   OlfC      GABA     OlfC_GABA 0.012900072
+# 31     MB Glut-GABA  MB_Glut-GABA 0.011094379
+# 32    HTH      Hist      HTH_Hist 0.009392803
+# 33    THM      Chol      THM_Chol 0.006664412
+# 34     BF Glut-GABA  BF_Glut-GABA 0.006224454
+# 35     HB Glut-GABA  HB_Glut-GABA 0.005551941
+# 36     MB GABA-Glyc  MB_GABA-Glyc 0.002667983
+```
+
+#### Plot
+
+```{r, fig.width=3, fig.height=3}
+summary_rgnt_pk_spec %>% 
+    mutate(rank = rank(spec)) %>% 
+    ggplot(
+        aes(rank, spec, label = RegionNT)
+    ) + 
+    geom_point() + 
+    geom_text_repel(
+        direction = "x",
+        nudge_x = -10,               # push labels to the right
+        size = 2.5,
+        # box.padding = 0.35,
+        point.padding = 0.35,
+        # min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = 5,
+        show.legend = FALSE
+    ) +
+    theme_md_classic()
+```
+
+Only GABA & Glut:
+
+```{r, fig.width=3, fig.height=3}
+summary_rgnt_pk_spec %>% 
+    subset(NT %in% c("GABA", "Glut")) %>% 
+    mutate(rank = rank(spec)) %>% 
+    ggplot(
+        aes(rank, spec, label = RegionNT)
+    ) + 
+    geom_point() + 
+    geom_text_repel(
+        direction = "x",
+        nudge_x = -10,               # push labels to the right
+        size = 2.5,
+        # box.padding = 0.35,
+        point.padding = 0.35,
+        # min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = 5,
+        show.legend = FALSE
+    ) +
+    theme_md_classic()
+```
+
+Maybe plot against number of clusters?
+[here, again using all NTs]:
+```{r, fig.width=3, fig.height=3}
+summary_rgnt_pk_spec %>% 
+    mutate(rank = rank(spec)) %>% 
+    left_join(
+        setNames(
+            as.data.frame(table(obs$RegionNT)),
+            c("RegionNT", "nclust")
+        ),
+        by = "RegionNT"
+    ) %>% 
+    ggplot(
+        aes(nclust, spec, label = RegionNT)
+    ) + 
+    geom_point() + 
+    geom_text_repel(
+        direction = "x",
+        # nudge_x = -10,               # push labels to the right
+        size = 2,
+        box.padding = 0.35,
+        point.padding = 0.35,
+        # min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = 10,
+        show.legend = FALSE
+    ) +
+    labs(
+        x = "Number of clusters",
+        y = "Peak Exclusivity Score\n(higher = peaks are more exclusive)"
+    ) +
+    stat_cor(aes(label = ..rr.label..), size=2) +
+    coord_cartesian(clip="off") +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "region_nt_nclusts_vs_peak_specificity.pdf"),
+    width = 40, height = 40, units = "mm"
+)
+```
+
+
+### (For Region)
+
+not used, i think every time it will more or less just betray high specificity
+in a region+NT, unless something more is done with those numbers.
+
+Actually, do for region separately. If comparatively higher in MB and HTH,
+that could be implying that regional identities exist but there is peak
+sharing across NT.
+
+(Or maybe just skip to peak sharing across NT like w/e)
+
+```{r}
+rg_pk_spec <- left_join(
+    reshape2::melt(
+        peak_frac_rg, 
+        varnames = c("peak", "Region"), 
+        value.name = "spec"
+    ),
+    reshape2::melt(
+        rrank_peak_frac_rg, 
+        varnames = c("peak", "Region"), 
+        value.name = "rev_rank_spec"
+    ),
+    by = c("peak", "Region")
+)
+```
+
+```{r}
+# > print.data.frame(rg_pk_spec[1e6:(1e6+6),])
+#                            peak Region       spec rev_rank_spec
+# 1000000 chr11:64880671-64881172     BF 0.03871268        392582
+# 1000001 chr11:64883638-64884139     BF 0.05087036        287696
+# 1000002 chr11:64890965-64891466     BF 0.03190480        427274
+# 1000003 chr11:64889585-64890086     BF 0.05958058        173773
+# 1000004 chr11:64894584-64895085     BF 0.05869215        184391
+# 1000005 chr11:64898161-64898662     BF 0.05403752        246892
+# 1000006 chr11:64898813-64899314     BF 0.06154092        152570
+```
+
+and the summary metric:
+
+```{r}
+summary_rg_pk_spec <- rg_pk_spec %>% 
+    filter(rev_rank_spec == 1e3) %>% 
+    arrange(desc(spec)) %>% 
+    select(Region, spec) %>% 
+    filter(
+        Region != "",
+        Region != "Multi"
+    )
+
+# > print.data.frame(summary_rg_pk_spec)
+#    Region       spec
+# 1     THM 0.64209810
+# 2     STR 0.47483806
+# 3      MB 0.42574910
+# 4     CTX 0.38040430
+# 5     HTH 0.29502746
+# 6      BF 0.28634303
+# 7     AMY 0.26964121
+# 8     HiF 0.26629023
+# 9    CLEn 0.12714171
+# 10     HB 0.07843884
+# 11   OlfC 0.05683422
+# 12    EXA 0.05477483
+# 13     GP 0.04764324
+# 14    Pin 0.01187029
+```
+#### Plot
+
+```{r, fig.width=3, fig.height=3}
+summary_rg_pk_spec %>% 
+    mutate(rank = rank(spec)) %>% 
+    ggplot(
+        aes(rank, spec, label = Region)
+    ) + 
+    geom_point() + 
+    geom_text_repel(
+        direction = "x",
+        nudge_x = -10,               # push labels to the right
+        size = 2.5,
+        # box.padding = 0.35,
+        point.padding = 0.35,
+        # min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = 5,
+        show.legend = FALSE
+    ) +
+    theme_md_classic()
+```
+
+Maybe plot against number of clusters?
+
+```{r, fig.width=3, fig.height=3}
+summary_rg_pk_spec %>% 
+    mutate(rank = rank(spec)) %>% 
+    left_join(
+        setNames(
+            as.data.frame(table(obs$Dominant_Region)),
+            c("Region", "nclust")
+        ),
+        by = "Region"
+    ) %>% 
+    ggplot(
+        aes(nclust, spec, label = Region)
+    ) + 
+    geom_point() + 
+    geom_text_repel(
+        direction = "x",
+        # nudge_x = -10,               # push labels to the right
+        size = 2,
+        box.padding = 0.35,
+        point.padding = 0.35,
+        # min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = 10,
+        show.legend = FALSE
+    ) +
+    labs(
+        x = "Number of clusters",
+        y = "Peak Exclusivity Score\n(higher = peaks are more exclusive)"
+    ) +
+    stat_cor(aes(label = ..rr.label..), size=2) +
+    coord_cartesian(clip="off") +
+    theme_md_classic()
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "region_nclusts_vs_peak_specificity.pdf"),
+    width = 40, height = 40, units = "mm"
+)
+```
+
+
+## Find Regional Cross-NT Peaks
+
+### Get combined ranks
+
+Using the GABA/Glut useable regions
+
+```{r}
+# still a peak-by-region matrix
+comb_rank_gagl_rgnt <- sapply(useable_regions, function(rg) {
+    nm_glut <- paste0(rg, "_Glut")
+    nm_gaba <- paste0(rg, "_GABA")
+    rank_peak_frac_rgnt[, nm_glut] + rank_peak_frac_rgnt[, nm_gaba]
+})
+```
+
+### Plot specificity vs. expression & combined ranks
+
+3 plots side-by-side: exp-vs-specificity for each NT, and then also plot 
+specificities against. In all 3, color by combined rank (or maybe just the top20).
+
+```{r}
+dir_plt <- file.path(pdir_peak_spec, "plots_diagnostic_combined_spec_ranks")
+if (!dir.exists(dir_plt))
+    dir.create(dir_plt)
+```
+
+
+```{r, fig.width=16, fig.height=6}
+# will show the avg cpm in a cluster for if all peaks were uniformly distributed
+exp_for_unif <- log10(1e6 / nrow(mat))
+
+# total peaks (for recalculating ranks)
+n_peaks <- nrow(atac_by_cl_cpm)
+
+# for (rg in useable_regions) {
+for (rg in c("MB", "THM")) {
+    rg_gl <- paste0(rg, "_Glut")
+    rg_ga <- paste0(rg, "_GABA")
+    ncl_gl <- length(which((obs$Cluster_Dominant_Region == rg) & (obs$NT == "Glut")))
+    ncl_ga <- length(which((obs$Cluster_Dominant_Region == rg) & (obs$NT == "GABA")))
+    
+    # for these plots, invert rank so it's easy to highlight the top ones using
+    # log scaling (naturally highlights the lowest numbers, smears together the
+    # highest). Because combined ranks have weird numbers (variable ranges),
+    # will calculate the rank of the combined-ranks, and then invert those
+    # ranks
+    
+    # df_gl <- data.frame(
+    #     avg_exp    = log10(peak_sums_rgnt[, rg_gl] / ncl_gl),
+    #     frac_reads = peak_frac_rgnt[, rg_gl],
+    #     comb_rank  = n_peaks - rank(comb_rank_gagl_rgnt[, rg])
+    # ) %>% 
+    #     .[order(.$comb_rank, decreasing = TRUE), ]
+    # df_ga <- data.frame(
+    #     avg_exp    = log10(peak_sums_rgnt[, rg_ga] / ncl_ga),
+    #     frac_reads = peak_frac_rgnt[, rg_ga],
+    #     comb_rank  = n_peaks - rank(comb_rank_gagl_rgnt[, rg])
+    # ) %>% 
+    #     .[order(.$comb_rank, decreasing = TRUE), ]
+    
+    df_ss <- data.frame(
+        frac_gl = peak_frac_rgnt[, rg_gl],
+        frac_ga = peak_frac_rgnt[, rg_ga],
+        comb_rank = n_peaks - rank(comb_rank_gagl_rgnt[, rg])
+    ) %>% 
+        .[order(.$comb_rank, decreasing = TRUE), ]
+    
+    # p1 <- ggplot(df_gl, aes(avg_exp, frac_reads, color = comb_rank)) +
+    #     geom_point() +
+    #     geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
+    #     scale_color_viridis_c(trans="log10", direction=-1) + 
+    #     labs(
+    #         title = rg_gl, 
+    #         x = paste0("avg cpm in ", rg_gl, " clusters (log10)"),
+    #         y = paste0("peak specificity\n(fraction normalized reads in ", rg_gl, ")"),
+    #         color = "combined specificity\nranks, in reverse-rank\norder"
+    #     ) + 
+    #     theme_md_classic()
+    # 
+    # p2 <- ggplot(df_ga, aes(avg_exp, frac_reads, color = comb_rank)) +
+    #     geom_point() +
+    #     geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
+    #     scale_color_viridis_c(trans="log10", direction=-1) + 
+    #     labs(
+    #         title = rg_ga, 
+    #         x = paste0("avg cpm in ", rg_ga, " clusters (log10)"),
+    #         y = paste0("peak specificity\n(fraction normalized reads in ", rg_ga, ")"),
+    #         color = "combined specificity\nranks, in reverse-rank\norder"
+    #     ) + 
+    #     theme_md_classic()
+    
+    p3 <- ggplot(df_ss, aes(frac_gl, frac_ga, color = comb_rank)) + 
+        geom_point() + 
+        geom_abline(slope = 1, intercept = 0, linewidth = 0.25) +
+        scale_color_viridis_c(trans="log10", direction=-1) + 
+        labs(
+            title = rg,
+            x = "peak specificity Glut", 
+            y = "peak specificity GABA", 
+            color = "rank shared\nspecificity"
+        ) + 
+        theme_md_classic()
+    
+    ggsave(
+        file.path(dir_plt, paste0(rg, ".pdf")),
+        # p1 + p2 + p3 + plot_layout(guides = "collect"),
+        p3,
+        width = 80, height = 50, units = "mm"
+    )
+}
+```
+
+
+
+
+### Top 40 candidates by region
+
+```{r}
+top40_peaks_by_comb_rank_region <- apply(comb_rank_gagl_rgnt, 2, function(x) {
+    ord <- order(x)
+    idx <- tail(ord, 40)
+    names(x)[idx]
+}, simplify = FALSE) # make a list
+```
+
+### Heatmap code (cands_by_region)
+
+cands_by_region is a named list (names are regions), each element a char vector
+of peak names.
+
+the essence:
+
+```{r}
+# atac_by_cl_cpm %>% 
+#     .[unlist(top20_peaks_by_region), ] %>% 
+#     t %>% 
+#     scale %>% 
+#     t %>% 
+#     .[, colnames(.) %in% rownames(subset(obs, Cluster_Dominant_Region %in% useable_regions))] ->
+#     atac_by_cl_cpm_sub
+```
+
+
+```{r}
+make_heatmap <- function(cands_by_region, regions = useable_regions, Z_CLIP=6) {
+    
+    ## ---------------- config ----------------
+    region_levels <- regions                         # enforce this order for rows & cols
+    region_pal    <- setNames(brewer.pal(length(region_levels), "Set2"), region_levels)
+    
+    # preferred NT ordering (others appended afterward)
+    nt_preferred  <- c("Glut", "GABA")
+    
+    # heatmap colors
+    hm_cols <- colorRamp2(c(-Z_CLIP, 0, Z_CLIP), c("#38598C", "white", "#B40426"))
+    
+    ## -------- rows (peaks) from top20 lists, grouped by region ----------
+    peaks_concat <- unlist(cands_by_region[region_levels], use.names = FALSE)
+    peaks_concat <- peaks_concat[!is.na(peaks_concat)]
+    
+    peak_region_vec <- unlist(
+        lapply(region_levels, function(rg) rep(rg, length(cands_by_region[[rg]]))),
+        use.names = FALSE
+    )
+    peak_region_vec <- peak_region_vec[seq_along(peaks_concat)]
+    peak_region_fac <- factor(peak_region_vec, levels = region_levels)
+    
+    ## ------- columns (clusters), grouped by region, THEN ordered by NT ------
+    # keep only clusters in the chosen regions
+    obs_sub <- obs %>%
+        filter(Cluster_Dominant_Region %in% region_levels)
+    
+    # NT levels: preferred first (if present), then all remaining NTs
+    nt_all     <- as.character(obs_sub$NT_MSN)
+    nt_levels  <- c(nt_preferred[nt_preferred %in% nt_all],
+                    setdiff(sort(unique(nt_all)), nt_preferred))
+    
+    # palette for NTs (works for any # of categories)
+    nt_pal <- setNames(colorRampPalette(brewer.pal(9, "Set1"))(length(nt_levels)), nt_levels)
+    
+    # enforce factor levels and order columns by Region -> NT -> original order
+    ### -> overwrite NT with values derived from NT_MSN
+    obs_sub <- obs_sub %>%
+        mutate(
+            Dominant_Region = factor(as.character(Cluster_Dominant_Region), levels = region_levels),
+            NT = factor(as.character(NT_MSN), levels = nt_levels)
+        )
+    col_order <- rownames(arrange(obs_sub, Dominant_Region, NT))
+    col_region_fac <- factor(as.character(obs_sub[col_order, "Dominant_Region", drop = TRUE]),
+                             levels = region_levels)
+    col_nt_fac     <- factor(as.character(obs_sub[col_order, "NT", drop = TRUE]),
+                             levels = nt_levels)
+    
+    ## -------- matrix subset + z-score per peak (row) ----------
+    peaks_present <- intersect(peaks_concat, rownames(atac_by_cl_cpm))
+    if (length(peaks_present) == 0) 
+        stop("No selected peaks found in matrix.")
+    
+    keep_idx <- peaks_concat %in% peaks_present
+    peaks_concat    <- peaks_concat[keep_idx]
+    peak_region_fac <- droplevels(peak_region_fac[keep_idx])
+    
+    atac_by_cl_cpm_sub <- atac_by_cl_cpm[peaks_concat, col_order, drop = FALSE]
+    mat_z <- t(scale(t(atac_by_cl_cpm_sub)))
+    mat_z[is.na(mat_z)] <- 0
+    mat_z[mat_z >  Z_CLIP] <-  Z_CLIP
+    mat_z[mat_z < -Z_CLIP] <- -Z_CLIP
+    
+    ## -------------- annotations ---------------
+    row_anno <- rowAnnotation(
+        PeakRegion = peak_region_fac,
+        col = list(PeakRegion = region_pal),
+        show_annotation_name = TRUE,
+        annotation_name_side = "top",
+        annotation_legend_param = list(title = "Peak region")
+    )
+    
+    top_anno <- HeatmapAnnotation(
+        ClusterRegion = col_region_fac,
+        NT            = col_nt_fac,
+        col = list(
+            ClusterRegion = region_pal,
+            NT            = nt_pal
+        ),
+        show_annotation_name = TRUE,
+        annotation_name_side = "left",
+        annotation_height = unit(c(3, 3), "mm")  # tweak bar heights if needed
+    )
+    
+    ## -------------- heatmap -------------------
+    ht <- Heatmap(
+        mat_z,
+        name = "z",
+        col = hm_cols,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = FALSE,
+        show_column_names = FALSE,
+        row_split = peak_region_fac,      # row slice order follows region_levels
+        column_split = col_region_fac,    # column slice order follows region_levels
+        top_annotation = top_anno,
+        left_annotation = row_anno,
+        row_gap = unit(2, "mm"),
+        column_gap = unit(2, "mm"),
+        border = TRUE,
+        column_title = "clusters grouped by dominant region & neurotransmitter",
+        row_title = "candidate peaks grouped by region"
+    )
+    return(ht)
+}
+```
+
+### Heatmap top40
+
+```{r}
+table(obs$RegionNT) %>% 
+    sort %>% 
+    .[grepl("_(GABA|Glut)$", names(.))]
+```
+
+OlfC and EXA are the 2 smallest...
+
+```{r, fig.width=20, fig.height=20}
+ht <- make_heatmap(
+    top40_peaks_by_comb_rank_region,
+    regions = setdiff(useable_regions, c("OlfC"))
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+```
+
+```{r}
+pdf(
+    file.path(pdir_peak_spec, "heatmap_top40_by_combined_rank_dropOlfC.pdf"),
+    width=20, height=16
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+invisible(dev.off())
+```
+
+
+```{r, fig.width=20, fig.height=20}
+ht <- make_heatmap(
+    top40_peaks_by_comb_rank_region,
+    regions = setdiff(useable_regions, c("EXA"))
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+```
+
+```{r}
+pdf(
+    file.path(pdir_peak_spec, "heatmap_top40_by_combined_rank_dropEXA.pdf"),
+    width=20, height=16
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+invisible(dev.off())
+```
+

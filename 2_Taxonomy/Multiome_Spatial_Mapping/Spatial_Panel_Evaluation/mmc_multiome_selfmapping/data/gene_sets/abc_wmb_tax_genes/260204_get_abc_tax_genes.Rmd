@@ -1,0 +1,74 @@
+---
+title: "260204_get_abc_tax_genes"
+output: html_document
+date: "2026-02-04"
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+```
+
+```{r}
+path_abc <- '/Volumes/krienen/atlases/allen-brain-cell-atlas/'
+pth_tax <- file.path(path_abc, 'metadata/WMB-taxonomy/20231215/cl.df_CCN202307220.xlsx')
+pth_gn  <- file.path(path_abc, 'metadata/WMB-10X/20231215/gene.csv')
+
+# > cbind(readxl::excel_sheets(pth_tax))
+#      [,1]                        
+# [1,] "cluster_annotation"        
+# [2,] "supertype_annotation"      
+# [3,] "subclass_annotation"       
+# [4,] "class_annotation"          
+# [5,] "MERFISH_gene_panel"        
+# [6,] "Column header explanation "
+
+## only need the cluster table, it has the rest of the taxonomy in it
+cl <- read_excel(pth_tax, "cluster_annotation")
+mf <- read_excel(pth_tax, "MERFISH_gene_panel")
+gn <- read.csv(pth_gn)
+
+# > head(gn)
+#      gene_identifier gene_symbol                                  name mapped_ncbi_identifier comment
+# 1 ENSMUSG00000051951        Xkr4     X-linked Kx blood group related 4        NCBIGene:497097        
+# 2 ENSMUSG00000089699      Gm1992                   predicted gene 1992                               
+# 3 ENSMUSG00000102331     Gm19938                 predicted gene, 19938                               
+# 4 ENSMUSG00000102343     Gm37381                 predicted gene, 37381                               
+# 5 ENSMUSG00000025900         Rp1        retinitis pigmentosa 1 (human)         NCBIGene:19888        
+# 6 ENSMUSG00000025902       Sox17 SRY (sex determining region Y)-box 17         NCBIGene:20671 
+```
+
+```{r}
+c(
+    cl$cluster_id_label,
+    cl$supertype_label,
+    cl$subclass_label,
+    cl$class_label
+) %>% 
+    strsplit(" ") %>% 
+    unlist %>% 
+    unique %>% 
+    intersect(gn$gene_symbol) ->
+    abc_tax_genes
+
+# > length(abc_tax_genes)
+# [1] 194
+```
+
+only 194 genes, which is fewer than I thought (and there's like some chance of
+a coincidental overlap of a taxonomy name and a gene name)
+
+```{r}
+write(
+    abc_tax_genes, 
+    '/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets/abc_wmb_tax_genes/abc_tax_genes.txt'
+)
+```
+
+```{r}
+write(
+    unique(mf$vizgen_gene), 
+    '/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets/abc_wmb_tax_genes/abc_merfish_genes.txt'
+)
+```
+

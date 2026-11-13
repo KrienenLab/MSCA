@@ -1,0 +1,830 @@
+---
+title: "3_Regional_Gaba_Glut_Coenrichment"
+output: html_document
+date: "2025-10-08"
+---
+
+This notebook will also produce some general overview plots for all the
+DESeq2 test results.
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ggplot2)
+    library(patchwork)
+    library(ComplexHeatmap)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 10, 
+        base_family = "Helvetica",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text  = element_text(color = "black", size = 8),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        complete = TRUE
+    )
+}
+```
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT"
+dir_dsres <- file.path(pdir, "DESeq2_results")
+```
+
+```{r}
+pdir_plots <- file.path(pdir, "DESeq2_results_plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+```
+
+# Imports
+
+```{r}
+dsres <- lapply(dir(dir_dsres), function(x) {
+    read.csv(file.path(dir_dsres, x, "DESeq2_apeglm_results.csv"), row.names="X")
+})
+names(dsres) <- dir(dir_dsres)
+```
+
+# MA plots
+
+```{r}
+dir_plt <- file.path(pdir_plots, "ma_plots_compare_lfcshrink")
+if (!dir.exists(dir_plt))
+    dir.create(dir_plt)
+```
+
+```{r}
+for (nm in names(dsres)) {
+    p1 <- dsres[[nm]] %>% 
+        .[order(.$pvalue, decreasing=TRUE), ] %>% 
+        ggplot(aes(log10(baseMean), log2FoldChange, color = -log10(padj))) + 
+        geom_point() + 
+        geom_hline(yintercept = 0, linewidth = 0.25) + 
+        scale_color_viridis_c() + 
+        labs(title = nm) +
+        theme_md_classic()
+    
+    p2 <- dsres[[nm]] %>% 
+        .[order(.$pvalue, decreasing=TRUE), ] %>% 
+        ggplot(aes(log10(baseMean), log2FoldChange_shr, color = -log10(padj))) + 
+        geom_point() + 
+        geom_hline(yintercept = 0, linewidth = 0.25) + 
+        scale_color_viridis_c() + 
+        labs(title = nm) +
+        theme_md_classic()
+    
+    ggsave(
+        file.path(dir_plt, paste0(nm, ".png")),
+        p1 + p2,
+        width=12, height=6
+    )
+}
+```
+
+# Summarize magnitude of shrinkage
+
+```{r}
+table(
+    sign(dsres[["CTX_GABA"]]$log2FoldChange),
+    sign(dsres[["CTX_GABA"]]$log2FoldChange_shr)
+)
+```
+
+```{r}
+table(abs(dsres[["CTX_GABA"]]$log2FoldChange) > abs(dsres[["CTX_GABA"]]$log2FoldChange_shr))
+```
+
+
+```{r}
+dsres %>% 
+    Map(function(x, nm) 
+        transmute(x, sample=nm, shr=abs(log2FoldChange)-abs(log2FoldChange_shr)), 
+        ., 
+        names(.)
+    ) %>% 
+    unname %>% 
+    do.call(rbind, .) -> 
+    df
+```
+
+
+```{r}
+p1 <- ggplot(df, aes(sample, shr)) + 
+    geom_boxplot(outlier.size=1) + 
+    geom_hline(yintercept = 0, linewidth = 0.25) +
+    theme_md_classic() + 
+    labs(y = "magnitude of shrinkage\n(change in LFC magnitude)", x=NULL) +
+    theme(axis.text.x = element_text(angle=30, hjust=1))
+
+p2 <- ggplot(df, aes(sample, shr)) + 
+    geom_boxplot(outliers=FALSE) + 
+    geom_hline(yintercept = 0, linewidth = 0.25) +
+    theme_md_classic() + 
+    labs(y = "magnitude of shrinkage\n(change in LFC magnitude)", x=NULL) +
+    theme(axis.text.x = element_text(angle=30, hjust=1))
+```
+
+```{r}
+p1 + p2
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "boxplot_shrinkage_magnitude.pdf"), 
+    p1 + p2,
+    width=12, height=4
+)
+```
+
+# Glut-GABA Co-Enrichment
+
+```{r}
+pdir_gagl <- file.path(pdir, "Gaba-Glut_CoEnrichment")
+if (!dir.exists(pdir_gagl))
+    dir.create(pdir_gagl)
+```
+
+## Compare LFC by NT within regions
+
+```{r}
+names(dsres) %>% 
+    split(., sub("_.*", "", .)) %>% 
+    lapply(. %>% sub(".*_", "", .)) %>% 
+    sapply(function(x) all(c("Glut", "GABA") %in% x)) %>% 
+    .[.] %>% 
+    names ->
+    useable_regions
+
+# > useable_regions
+# [1] "AMY"  "BF"   "CTX"  "EXA"  "HiF"  "HTH"  "MB"   "OlfC" "THM" 
+```
+
+Ummm... OlfC is still there, I guess that's ok for now... But OlfC GABA has
+only 2 clusters.
+
+```{r}
+# dir_plt <- file.path(pdir_gagl, "hexbin_glut_vs_gaba")
+# if (!dir.exists(dir_plt))
+#     dir.create(dir_plt)
+# 
+# for (rg in useable_regions) {
+#     p <- ggplot(
+#         data.frame(
+#             glut = dsres[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+#             gaba = dsres[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+#         ),
+#         aes(glut, gaba)
+#     ) + 
+#         geom_hex(bins=50) + 
+#         geom_hline(yintercept=0, linewidth=0.25) +
+#         geom_vline(xintercept=0, linewidth=0.25) +
+#         geom_abline(slope=1, intercept=0, linewidth=0.25, linetype="dashed") +
+#         scale_fill_viridis_c(trans="log2") +
+#         # coord_equal() +
+#         labs(
+#             x = paste0(rg, "_Glut"),
+#             y = paste0(rg, "_GABA"),
+#             fill = "peaks"
+#         ) + 
+#         theme_md_classic()
+#     ggsave(
+#         file.path(dir_plt, paste0(rg, ".pdf")),
+#         p,
+#         width=6, height=4
+#     )
+# }
+```
+
+```{r}
+# q <- 0.98
+# 
+# for (rg in useable_regions) {
+#     df <- data.frame(
+#         glut = dsres[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+#         gaba = dsres[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+#     )
+#     tx <- quantile(df$glut, q, na.rm = TRUE)
+#     ty <- quantile(df$gaba, q, na.rm = TRUE)
+#     
+#     p <- ggplot(df, aes(glut, gaba)) + 
+#         geom_hex(bins=50) + 
+#         geom_hline(yintercept=0, linewidth=0.25) +
+#         geom_vline(xintercept=0, linewidth=0.25) +
+#         geom_abline(slope=1, intercept=0, linewidth=0.25) +
+#         geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+#         geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+#         scale_fill_viridis_c(trans="log2") +
+#         # coord_equal() +
+#         labs(
+#             x = paste0(rg, "_Glut"),
+#             y = paste0(rg, "_GABA"),
+#             fill = "peaks"
+#         ) + 
+#         theme_md_classic() 
+#     print(p)
+# }
+```
+
+```{r}
+# q <- 0.99
+# 
+# for (rg in useable_regions) {
+#     df <- data.frame(
+#         glut = dsres[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+#         gaba = dsres[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+#     )
+#     tx <- quantile(df$glut, q, na.rm = TRUE)
+#     ty <- quantile(df$gaba, q, na.rm = TRUE)
+#     
+#     p <- ggplot(df, aes(glut, gaba)) + 
+#         geom_hex(bins=50) + 
+#         geom_hline(yintercept=0, linewidth=0.25) +
+#         geom_vline(xintercept=0, linewidth=0.25) +
+#         geom_abline(slope=1, intercept=0, linewidth=0.25) +
+#         geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+#         geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+#         scale_fill_viridis_c(trans="log2") +
+#         # coord_equal() +
+#         labs(
+#             x = paste0("shrunken log2FoldChange\n", rg, "_Glut"),
+#             y = paste0("shrunken log2FoldChange\n", rg, "_GABA"),
+#             fill = "peaks"
+#         ) + 
+#         theme_md_classic() 
+#     print(p)
+# }
+```
+
+
+Save those:
+
+```{r}
+dir_plt <- file.path(pdir_gagl, "hexbin_glut_vs_gaba_show_q99")
+if (!dir.exists(dir_plt))
+    dir.create(dir_plt)
+
+q <- 0.99
+
+for (rg in useable_regions) {
+    df <- data.frame(
+        glut = dsres[[paste0(rg, "_Glut")]]$log2FoldChange_shr,
+        gaba = dsres[[paste0(rg, "_GABA")]]$log2FoldChange_shr
+    )
+    tx <- quantile(df$glut, q, na.rm = TRUE)
+    ty <- quantile(df$gaba, q, na.rm = TRUE)
+    
+    p <- ggplot(df, aes(glut, gaba)) + 
+        geom_hex(bins=50) + 
+        geom_hline(yintercept=0, linewidth=0.25) +
+        geom_vline(xintercept=0, linewidth=0.25) +
+        geom_abline(slope=1, intercept=0, linewidth=0.25) +
+        geom_vline(xintercept = tx, linewidth=0.25, linetype = "dashed") +
+        geom_hline(yintercept = ty, linewidth=0.25, linetype = "dashed") +
+        scale_fill_viridis_c(trans="log2") +
+        # coord_equal() +
+        labs(
+            x = paste0("shrunken log2FoldChange\n", rg, "_Glut"),
+            y = paste0("shrunken log2FoldChange\n", rg, "_GABA"),
+            fill = "peaks"
+        ) + 
+        theme_md_classic() 
+    ggsave(
+        file.path(dir_plt, paste0(rg, ".pdf")),
+        p,
+        width=6, height=4
+    )
+}
+
+```
+
+
+## Consider test for overlaps
+
+Idea is that the LFCs are generally not correlated and not related, but are 
+there more than expected peaks that have high LFCs in both Glut & GABA?
+
+I didn't see any issues with this code:
+
+```{r}
+get_region_pair <- function(dsres, region, use_shr = TRUE) {
+    nm_g <- paste0(region, "_Glut")
+    nm_b <- paste0(region, "_GABA")
+    g <- dsres[[nm_g]]
+    b <- dsres[[nm_b]]
+    stopifnot(!is.null(g), !is.null(b))
+    # join by peak id (rownames)
+    common <- intersect(rownames(g), rownames(b))
+    g <- g[common, , drop = FALSE]
+    b <- b[common, , drop = FALSE]
+    col_g <- if (use_shr) "log2FoldChange_shr" else "log2FoldChange"
+    col_b <- if (use_shr) "log2FoldChange_shr" else "log2FoldChange"
+    x <- g[[col_g]]
+    y <- b[[col_b]]
+    data.frame(peak = common, glut = x, gaba = y, stringsAsFactors = FALSE)
+}
+
+joint_tail_test <- function(df, q = 0.95) {
+    x <- df$glut
+    y <- df$gaba
+    tx <- quantile(x, q, na.rm = TRUE)
+    ty <- quantile(y, q, na.rm = TRUE)
+    hx <- x > tx
+    hy <- y > ty
+    
+    ok <- is.finite(x) & is.finite(y)
+    hx <- hx[ok]; hy <- hy[ok]
+    n  <- length(hx)
+    
+    n11 <- sum(hx & hy)
+    n10 <- sum(hx & !hy)
+    n01 <- sum(!hx & hy)
+    n00 <- sum(!hx & !hy)
+    
+    # Fisher one-sided (enrichment in high-high cell)
+    tab <- matrix(c(n11, n10, n01, n00), nrow = 2,
+                  dimnames = list(Glut = c("High","Not"), GABA = c("High","Not")))
+    ft  <- fisher.test(tab, alternative = "greater")
+    
+    # Binomial conditional test: P(GABA-high | Glut-high) > P(GABA-high)
+    nA  <- n11 + n10
+    pB  <- mean(hy)
+    bt  <- if (nA > 0) binom.test(n11, nA, p = pB, alternative = "greater") else NULL
+    
+    data.frame(
+        n = n,
+        thresh_glut = tx,
+        thresh_gaba = ty,
+        n_glut_high = nA,
+        n_gaba_high = n11 + n01,
+        n_both_high = n11,
+        expected_both = n * mean(hx) * mean(hy),
+        fisher_odds_ratio = unname(ft$estimate),
+        fisher_p = ft$p.value,
+        binom_p = if (is.null(bt)) NA_real_ else bt$p.value,
+        stringsAsFactors = FALSE
+    )
+}
+
+run_all_regions <- function(dsres, regions, q = 0.95, use_shr = TRUE) {
+    out <- lapply(regions, function(rg) {
+        df <- get_region_pair(dsres, rg, use_shr = use_shr)
+        ans <- joint_tail_test(df, q = q)
+        cbind(region = rg, ans)
+    })
+    out <- do.call(rbind, out)
+    # BH adjust across regions (do both p-values)
+    out$fisher_p_adj <- p.adjust(out$fisher_p, method = "BH")
+    out$binom_p_adj  <- p.adjust(out$binom_p, method = "BH")
+    out <- out[order(out$fisher_p), ]
+    rownames(out) <- NULL
+    out
+}
+```
+
+
+```{r}
+# ---------- usage ----------
+# Example 1: "upper tail" (both strongly positive), using shrunken LFCs
+# res_coenr_q95 <- run_all_regions(dsres, useable_regions, q = 0.95, use_shr = TRUE)
+# res_coenr_q98 <- run_all_regions(dsres, useable_regions, q = 0.98, use_shr = TRUE)
+res_coenr_q99 <- run_all_regions(dsres, useable_regions, q = 0.99, use_shr = TRUE)
+```
+
+I think 99th percentile is warranted...
+
+```{r}
+print.data.frame(res_coenr_q99)
+```
+
+Insanely low p-values.
+
+I think we need to subset to only enriched peaks maybe. Or I can at least do
+the shuffling analysis.
+
+# All pairwise co-enrichments
+
+Note this no longer specific to GABA vs. Glut.
+
+I hate p-values, let's do something more comparative.
+
+```{r}
+# ----- All-pairs co-enrichment (upper tail only) -----
+# dsres: named list of data.frames with rownames = peak ids
+#        and columns including "log2FoldChange_shr" (or "log2FoldChange")
+# q:     upper-tail quantile threshold (e.g., 0.95 or 0.99)
+# use_shr: TRUE = use shrunken LFCs; FALSE = raw LFCs
+#
+# enrichment = observed_both / expected_both (under independence)
+# pairs_upper: all pairwise combos ranked by enrichment (ties broken by n_both)
+pairwise_coenrichment_upper <- function(dsres, q = 0.95, use_shr = TRUE) {
+    nm <- names(dsres)
+    region_of <- function(s) sub("_.*", "", s)
+    nt_of     <- function(s) sub(".*_", "", s)
+    col_lfc   <- if (use_shr) "log2FoldChange_shr" else "log2FoldChange"
+    
+    pairs <- t(combn(nm, 2))
+    
+    one_pair <- function(a, b) {
+        da <- dsres[[a]]
+        db <- dsres[[b]]
+        common <- intersect(rownames(da), rownames(db))
+        if (!length(common)) return(NULL)
+        
+        xa <- da[common, col_lfc]
+        xb <- db[common, col_lfc]
+        ok <- is.finite(xa) & is.finite(xb)
+        xa <- xa[ok]; xb <- xb[ok]
+        if (!length(xa)) return(NULL)
+        
+        ta <- quantile(xa, q, na.rm = TRUE)
+        tb <- quantile(xb, q, na.rm = TRUE)
+        ha <- xa > ta
+        hb <- xb > tb
+        
+        n11 <- sum(ha & hb)
+        pa  <- mean(ha); pb <- mean(hb)
+        n   <- length(ha)
+        exp_both <- n * pa * pb
+        enrich   <- if (exp_both > 0) n11 / exp_both else NA_real_
+        
+        data.frame(
+            A = a, B = b,
+            region_A = region_of(a), nt_A = nt_of(a),
+            region_B = region_of(b), nt_B = nt_of(b),
+            same_region = region_of(a) == region_of(b),
+            same_nt     = nt_of(a)     == nt_of(b),
+            n = n, pA = pa, pB = pb,
+            n_both = n11, expected_both = exp_both,
+            enrichment = enrich,
+            stringsAsFactors = FALSE
+        )
+    }
+    
+    out <- do.call(rbind, lapply(seq_len(nrow(pairs)), function(i) one_pair(pairs[i,1], pairs[i,2])))
+    if (is.null(out) || !nrow(out)) 
+        stop("No valid overlaps across pairs.")
+    key <- out$enrichment; key[is.na(key)] <- -Inf
+    o   <- order(key, out$n_both, decreasing = TRUE)
+    out <- out[o, , drop = FALSE]
+    rownames(out) <- NULL
+    out$rank_overall <- seq_len(nrow(out))
+    out
+}
+```
+
+```{r}
+# Upper-tail 99th percentile, using shrunken LFCs
+all_pairs_coenr <- pairwise_coenrichment_upper(dsres, q = 0.99, use_shr = TRUE)
+```
+
+```{r}
+all_pairs_coenr
+```
+
+
+```{r}
+subset(all_pairs_coenr, same_region) %>% 
+    # .[, !colnames(.) %in% c("n", "pA", "pB", "same_region", "region_A", "region_B", "nt_A", "nt_B", "same_nt")] %>%
+    # .[, !colnames(.) %in% c("n", "pA", "pB", "same_region", "A", "B", "same_nt")] %>%
+    .[, !colnames(.) %in% c("n", "pA", "pB", "same_region", "A", "B", "region_B", "same_nt")] %>% 
+    setNames(., sub("region_A", "region", names(.))) %>% 
+    print.data.frame(row.names=FALSE)
+```
+
+
+```
+ region      nt_A      nt_B n_both expected_both enrichment rank_overall
+    HTH      Glut Glut-GABA   1548       46.2702 33.4556583            3
+     MB      Dopa Glut-GABA   1061       46.2702 22.9305255            6
+    HTH      GABA Glut-GABA   1011       46.2702 21.8499164            7
+     GP      Chol      GABA    782       46.2702 16.9007266            8
+     MB      Dopa      Glut    746       46.2702 16.1226880            9
+     MB      GABA      Glut    631       46.2702 13.6372871           11
+    AMY      GABA       MSN    592       46.2702 12.7944120           15
+     MB      Glut Glut-GABA    586       46.2702 12.6647389           17
+    HTH      GABA      Glut    480       46.2702 10.3738475           20
+    AMY      GABA      Glut    411       46.2702  8.8826069           23
+    STR      GABA       MSN    317       46.2702  6.8510618           29
+     MB      Dopa      Sero    270       46.2702  5.8352892           31
+     MB      GABA      Sero    267       46.2702  5.7704527           33
+     MB Glut-GABA      Sero    196       46.2702  4.2359877           40
+     MB      GABA Glut-GABA    193       46.2702  4.1711512           41
+    AMY      Glut       MSN    191       46.2702  4.1279268           42
+     BF      GABA      Glut    167       46.2702  3.6092345           48
+     MB      Dopa      GABA    154       46.2702  3.3282761           51
+     MB      Glut      Sero    142       46.2702  3.0689299           55
+    THM      GABA      Glut    106       46.2702  2.2908913           76
+     GP      GABA Glut-GABA     91       46.2702  1.9667086           89
+    EXA      GABA      Glut     70       46.2702  1.5128528          112
+    CTX      GABA      Glut     57       46.2702  1.2318944          127
+     GP      Chol Glut-GABA     51       46.2702  1.1022213          141
+    HiF      GABA      Glut     45       46.2702  0.9725482          154
+   OlfC      GABA      Glut     23       46.2702  0.4970802          213
+    STR      Chol      GABA     23       46.2702  0.4970802          214
+    STR      Chol       MSN     19       46.2702  0.4106315          225
+```
+
+
+
+
+OLD (when just GABA and Glut, and no OlfC, and no cluster-level regional
+annotations):
+```
+          A        B region_A nt_A region_B nt_B same_region same_nt      n         pA         pB
+2  HTH_GABA HTH_Glut      HTH GABA      HTH Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+4   MB_GABA  MB_Glut       MB GABA       MB Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+10  BF_GABA  BF_Glut       BF GABA       BF Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+12 AMY_GABA AMY_Glut      AMY GABA      AMY Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+19 THM_GABA THM_Glut      THM GABA      THM Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+25 EXA_GABA EXA_Glut      EXA GABA      EXA Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+40 CTX_GABA CTX_Glut      CTX GABA      CTX Glut        TRUE   FALSE 462698 0.01000004 0.01000004
+   n_both expected_both enrichment rank_overall
+2     755       46.2702 16.3171977            2
+4     632       46.2702 13.6588992            4
+10    166       46.2702  3.5876223           10
+12    151       46.2702  3.2634395           12
+19    105       46.2702  2.2692791           19
+25     78       46.2702  1.6857502           25
+40     20       46.2702  0.4322436           40
+```
+
+```
+       A        B n_both expected_both enrichment rank_overall
+HTH_GABA HTH_Glut    755       46.2702 16.3171977            2
+ MB_GABA  MB_Glut    632       46.2702 13.6588992            4
+ BF_GABA  BF_Glut    166       46.2702  3.5876223           10
+AMY_GABA AMY_Glut    151       46.2702  3.2634395           12
+THM_GABA THM_Glut    105       46.2702  2.2692791           19
+EXA_GABA EXA_Glut     78       46.2702  1.6857502           25
+CTX_GABA CTX_Glut     20       46.2702  0.4322436           40
+```
+
+## (Check CTX Glut)
+
+```{r}
+# > nrow(all_pairs_coenr)
+# [1] 465
+```
+
+```{r}
+all_pairs_coenr %>% 
+    subset(A == "CTX_Glut" | B == "CTX_Glut") %>% 
+    .[, !colnames(.) %in% c("n", "pA", "pB", "same_region", "region_A", "nt_A", "region_B", "nt_B")] %>% 
+    print.data.frame
+```
+
+```
+            A             B same_nt n_both expected_both  enrichment rank_overall
+21  CLEn_Glut      CTX_Glut    TRUE    473       46.2702 10.22256225           21
+30   CTX_Glut     OlfC_Glut    TRUE    303       46.2702  6.54849125           30
+45   CTX_Glut      HiF_Glut    TRUE    170       46.2702  3.67407100           45
+87   AMY_Glut      CTX_Glut    TRUE     92       46.2702  1.98832078           87
+127  CTX_GABA      CTX_Glut   FALSE     57       46.2702  1.23189439          127
+215  CTX_Glut      EXA_Glut    TRUE     22       46.2702  0.47546801          215
+243  CTX_Glut      STR_Chol   FALSE     16       46.2702  0.34579492          243
+292   AMY_MSN      CTX_Glut   FALSE      9       46.2702  0.19450964          292
+301  CTX_Glut       HB_Glut    TRUE      8       46.2702  0.17289746          301
+317  CTX_Glut  GP_Glut-GABA   FALSE      7       46.2702  0.15128528          317
+354   BF_Glut      CTX_Glut    TRUE      4       46.2702  0.08644873          354
+359  CTX_Glut      EXA_GABA   FALSE      4       46.2702  0.08644873          359
+360  CTX_Glut     OlfC_GABA   FALSE      4       46.2702  0.08644873          360
+392  CTX_Glut      HiF_GABA   FALSE      2       46.2702  0.04322436          392
+393  CTX_Glut  MB_Glut-GABA   FALSE      2       46.2702  0.04322436          393
+394  CTX_Glut       MB_Sero   FALSE      2       46.2702  0.04322436          394
+401  AMY_GABA      CTX_Glut   FALSE      1       46.2702  0.02161218          401
+408  CTX_Glut      HTH_Glut    TRUE      1       46.2702  0.02161218          408
+430   BF_GABA      CTX_Glut   FALSE      0       46.2702  0.00000000          430
+435  CTX_Glut       GP_Chol   FALSE      0       46.2702  0.00000000          435
+436  CTX_Glut       GP_GABA   FALSE      0       46.2702  0.00000000          436
+437  CTX_Glut      HTH_GABA   FALSE      0       46.2702  0.00000000          437
+438  CTX_Glut HTH_Glut-GABA   FALSE      0       46.2702  0.00000000          438
+439  CTX_Glut       MB_Dopa   FALSE      0       46.2702  0.00000000          439
+440  CTX_Glut       MB_GABA   FALSE      0       46.2702  0.00000000          440
+441  CTX_Glut       MB_Glut    TRUE      0       46.2702  0.00000000          441
+442  CTX_Glut      STR_GABA   FALSE      0       46.2702  0.00000000          442
+443  CTX_Glut       STR_MSN   FALSE      0       46.2702  0.00000000          443 [*] tied for last (out of 465)
+444  CTX_Glut      THM_GABA   FALSE      0       46.2702  0.00000000          444
+445  CTX_Glut      THM_Glut    TRUE      0       46.2702  0.00000000          445
+```
+
+CTX_Glut & STR_MSN do not share enriched peaks.
+
+```{r}
+all_pairs_coenr %>% 
+    subset(A == "STR_MSN" | B == "STR_MSN") %>% 
+    .[, !colnames(.) %in% c("n", "pA", "pB", "same_region", "region_A", "nt_A", "region_B", "nt_B")] %>% 
+    print.data.frame
+```
+
+```
+                A        B same_nt n_both expected_both enrichment rank_overall
+28        AMY_MSN  STR_MSN    TRUE    365       46.2702 7.88844656           28
+29       STR_GABA  STR_MSN   FALSE    317       46.2702 6.85106181           29
+61       AMY_GABA  STR_MSN   FALSE    135       46.2702 2.91764462           61
+225      STR_Chol  STR_MSN   FALSE     19       46.2702 0.41063146          225
+265  GP_Glut-GABA  STR_MSN   FALSE     13       46.2702 0.28095837          265
+283     CLEn_Glut  STR_MSN   FALSE     11       46.2702 0.23773401          283
+307     OlfC_GABA  STR_MSN   FALSE      8       46.2702 0.17289746          307
+319      EXA_Glut  STR_MSN   FALSE      7       46.2702 0.15128528          319
+333       GP_GABA  STR_MSN   FALSE      6       46.2702 0.12967309          333
+350     OlfC_Glut  STR_MSN   FALSE      5       46.2702 0.10806091          350
+355       BF_Glut  STR_MSN   FALSE      4       46.2702 0.08644873          355
+363       MB_Sero  STR_MSN   FALSE      4       46.2702 0.08644873          363
+366      AMY_Glut  STR_MSN   FALSE      3       46.2702 0.06483655          366
+409      EXA_GABA  STR_MSN   FALSE      1       46.2702 0.02161218          409
+414      HTH_Glut  STR_MSN   FALSE      1       46.2702 0.02161218          414
+416       MB_Dopa  STR_MSN   FALSE      1       46.2702 0.02161218          416
+421       STR_MSN THM_GABA   FALSE      1       46.2702 0.02161218          421
+431       BF_GABA  STR_MSN   FALSE      0       46.2702 0.00000000          431
+434      CTX_GABA  STR_MSN   FALSE      0       46.2702 0.00000000          434
+443      CTX_Glut  STR_MSN   FALSE      0       46.2702 0.00000000          443
+447       GP_Chol  STR_MSN   FALSE      0       46.2702 0.00000000          447
+449       HB_Glut  STR_MSN   FALSE      0       46.2702 0.00000000          449
+450      HiF_GABA  STR_MSN   FALSE      0       46.2702 0.00000000          450
+452      HiF_Glut  STR_MSN   FALSE      0       46.2702 0.00000000          452
+454      HTH_GABA  STR_MSN   FALSE      0       46.2702 0.00000000          454
+456 HTH_Glut-GABA  STR_MSN   FALSE      0       46.2702 0.00000000          456
+457       MB_GABA  STR_MSN   FALSE      0       46.2702 0.00000000          457
+459       MB_Glut  STR_MSN   FALSE      0       46.2702 0.00000000          459
+460  MB_Glut-GABA  STR_MSN   FALSE      0       46.2702 0.00000000          460
+465       STR_MSN THM_Glut   FALSE      0       46.2702 0.00000000          465
+```
+
+
+## (!) Export table
+
+```{r}
+write.csv(
+    all_pairs_coenr,
+    file.path(pdir, "data/shrLFC_q99_coenrich_analysis.csv"),
+    row.names=FALSE
+)
+```
+
+
+## Heatmap enrichments
+
+```{r}
+enr_mat <- matrix(
+    NA, nrow=length(dsres), ncol=length(dsres),
+    dimnames = list(names(dsres), names(dsres))
+)
+
+for (i in seq_len(nrow(all_pairs_coenr))) {
+    rw <- all_pairs_coenr$A[i]
+    cl <- all_pairs_coenr$B[i]
+    enr_mat[rw, cl] <- all_pairs_coenr$enrichment[i]
+    enr_mat[cl, rw] <- all_pairs_coenr$enrichment[i]
+}
+```
+
+```{r}
+Heatmap(
+    enr_mat, 
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nobs/exp"),
+    col = circlize::colorRamp2(c(0,20,40), c("#38598C", "white", "#B40426"))
+)
+```
+
+```{r}
+pdf(file.path(pdir, "heatmap_coenr_q99_of_lfcshr.pdf"), width=9)
+Heatmap(
+    enr_mat, 
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nobs/exp"),
+    col = circlize::colorRamp2(seq(0, 40, length.out=100), viridis::viridis(100))
+)
+invisible(dev.off())
+```
+
+log-enrichment:
+
+```{r}
+fix_inf <- function(x) {
+    idx <- which(!is.finite(x), arr.ind = TRUE)
+    x[idx] <- NA
+    x
+}
+```
+
+```{r}
+range(log2(enr_mat) %>% .[!is.infinite(.)], na.rm=T)
+```
+
+
+```{r}
+pdf(file.path(pdir, "heatmap_coenr_q99_of_lfcshr_log2.pdf"), width=9)
+Heatmap(
+    log2(enr_mat) %>% fix_inf, 
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nlog2(obs/exp)"),
+    col = circlize::colorRamp2(seq(-6, 6, length.out=100), viridis::viridis(100))
+)
+invisible(dev.off())
+
+pdf(file.path(pdir, "heatmap_coenr_q99_of_lfcshr_log2_alt.pdf"), width=9)
+Heatmap(
+    log2(enr_mat) %>% fix_inf, 
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nlog2(obs/exp)"),
+    col = circlize::colorRamp2(c(-6, 0, 6), c("blue", "white", "red"))
+)
+invisible(dev.off())
+```
+
+### Only GABA & Glut?
+
+```{r}
+idx <- grep("_(GABA|Glut)$", rownames(enr_mat))
+enr_mat_gagl <- enr_mat[idx, idx]
+# > range(enr_mat_gagl, na.rm=T)
+# [1]  0.00000 40.24188
+```
+
+```{r}
+pdf(file.path(pdir, "heatmap_coenr_q99_of_lfcshr_only_GABA_Glut.pdf"), width=9)
+Heatmap(
+    enr_mat_gagl, 
+    heatmap_legend_param = list(title = "peak coenrichment\n(99th percentiles)\nobs/exp"),
+    col = circlize::colorRamp2(seq(0, 40, length.out=100), viridis::viridis(100))
+)
+invisible(dev.off())
+```
+
+# Find some candidate peaks?
+
+## HTH
+
+The HTH peaks looked bad from the specificity score analysis, and yet we see
+here the most co-enr of q99 peaks.
+
+```{r}
+df <- data.frame(
+    glut = dsres$HTH_Glut$log2FoldChange_shr,
+    gaba = dsres$HTH_GABA$log2FoldChange_shr,
+    row.names=rownames(dsres$HTH_Glut)
+) %>% 
+    mutate(
+        comb = glut * gaba,
+        rank_comb = rank(comb),
+        rank_comb = length(rank_comb) - rank_comb
+    )
+```
+
+```{r}
+df[order(df$rank_comb), ] %>% 
+    subset(glut>0 & gaba>0) %>% 
+    head(20) %>% 
+    print.data.frame
+```
+
+
+star the ones that overlap with the ones from the specificity-score based:
+```
+                              glut     gaba     comb rank_comb
+chr1:99247854-99248355    2.611584 2.742118 7.161270       837 **
+chr9:115423313-115423814  2.768246 2.450635 6.783959      1026 **
+chr5:149808415-149808916  3.068767 2.047316 6.282734      1395
+chr6:10728944-10729445    3.346172 1.848130 6.184159      1492
+chr14:108393726-108394227 2.066376 2.968965 6.134998      1553
+chr1:107692263-107692764  2.492228 2.461533 6.134702      1555 **
+chrX:38433322-38433823    2.108057 2.781260 5.863054      1858 **
+chr14:59684701-59685202   2.510791 2.326696 5.841846      1879 **
+chr3:147262676-147263177  1.729935 3.339630 5.777342      1947 
+chr15:89733192-89733693   2.223987 2.581518 5.741263      1994 **
+chr2:43926058-43926559    2.430171 2.298079 5.584725      2175 **
+chr12:19398144-19398645   2.269649 2.457425 5.577492      2188 **
+chrX:101911442-101911943  2.662489 2.084842 5.550867      2226
+chr3:62893489-62893990    2.309714 2.274503 5.253451      2700
+chr2:101960768-101961269  1.611725 3.240530 5.222844      2763
+chr7:26376887-26377388    2.208192 2.343343 5.174552      2850 **
+chr13:81871767-81872268   2.343312 2.195624 5.145033      2911 **
+chr10:90944307-90944808   2.024191 2.531778 5.124801      2947
+chr12:20089-20590         1.670137 3.064175 5.117594      2958
+chr13:110449533-110450034 2.778395 1.841137 5.115407      2961
+```
+
+
+From NonDAR analysis specificity scoring, the top20:
+
+```
+$HTH
+ [1] "chr12:16908571-16909072"   "chr11:55239964-55240465"   "chr6:98453798-98454299"   
+ [4] "chr2:95006479-95006980"    "chr8:52928378-52928879"    "chr17:23766848-23767349"  
+ [7] "chr1:107692263-107692764"  "chr10:118457242-118457743" "chr5:109704627-109705128" 
+[10] "chr1:99247854-99248355"    "chr13:81871767-81872268"   "chr10:82627150-82627651"  
+[13] "chr2:43926058-43926559"    "chrX:38433322-38433823"    "chr12:19398144-19398645"  
+[16] "chr7:26376887-26377388"    "chr10:3963806-3964307"     "chr9:115423313-115423814" 
+[19] "chr15:89733192-89733693"   "chr14:59684701-59685202"  
+```
+
+So I suppose half of the top20 overlap. Overall they're probably somewhat 
+similar.
+
+
+
+

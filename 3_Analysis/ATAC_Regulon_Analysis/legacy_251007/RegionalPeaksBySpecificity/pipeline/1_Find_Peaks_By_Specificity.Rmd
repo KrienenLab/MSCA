@@ -1,0 +1,2353 @@
+---
+title: "1_Find_Peaks_By_Specificity"
+output: html_document
+date: "2025-10-07"
+---
+
+This script finds regional peaks based on specificity scoring (the 
+kind-of-fraction of that peak's reads found in the Region_NT). Will find
+shared GABA/Glut peaks by balancing the highest specificity between the two
+Region_NTs.
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ComplexHeatmap)
+    library(circlize)
+    library(RColorBrewer)
+    library(ggplot2)
+    library(patchwork)
+})
+
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        plot.title  = element_text(hjust = 0.5, face = "bold", size = 8),
+        axis.title  = element_text(color = "black", size = 6),
+        axis.text   = element_text(color = "black", size = 6),
+        axis.ticks  = element_line(color = "black"),
+        legend.text = element_text(size = 6),
+        strip.text  = element_text(size = 8),
+        strip.background = element_blank(),
+        complete = TRUE
+    )
+}
+```
+
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC"
+path_mat <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_matrix.csv")
+path_obs <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_obs.csv")
+outdir   <- file.path(pdir, "RegionalPeaksBySpecificity")
+
+pdir_plots <- file.path(outdir, "plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+```
+
+
+# Imports 
+
+## Matrix
+
+```{r}
+mat <- data.table::fread(path_mat, header=TRUE)
+rnames <- mat[[1]]
+mat <- as.matrix(mat[,-1])
+rownames(mat) <- rnames
+```
+
+```{r}
+mat[1:3,1:3]
+```
+
+```{r}
+dim(mat)
+```
+
+
+## Obs
+
+```{r}
+obs <- read.csv(path_obs, row.names="X")
+stopifnot(all(rownames(obs) == colnames(mat)))
+```
+
+```{r}
+obs
+```
+
+## Useable regions
+
+```{r}
+# was this before, let's see
+# useable_regions <- c(
+#     "AMY", "BF", "CTX", "EXA", "HTH", "MB", "THM"
+# )
+
+obs[, c("Dominant_Region", "NT")] %>% 
+    unique %>% 
+    (function(x) split(x$NT, x$Dominant_Region)) %>% 
+    sapply(function(x) all(c("Glut", "GABA") %in% x)) %>% 
+    .[.] %>% 
+    names ->
+    useable_regions
+
+# > useable_regions
+#  [1] "AMY"   "BF"    "CTX"   "EXA"   "HiF"   "HTH"   "MB"   
+#  [8] "Multi" "OlfC"  "THM"
+
+### It used to be that OlfC only had 1 cluster, but now it has 2 GABA and
+### 20 Glut. 
+### 
+### However, I might still exclude it from this analysis because it has only
+### 2 GABA clusters...
+###
+
+# obs %>% 
+#     subset(!Dominant_Region == "Multi") %>% 
+#     subset(Dominant_Region %in% useable_regions) %>% 
+#     subset(NT %in% c("GABA", "Glut")) %>% 
+#     mutate(Region_NT = paste0(Dominant_Region, "_", NT)) %>% 
+#     .$Region_NT %>% 
+#     table %>% 
+#     sort
+# 
+# .
+# OlfC_GABA  EXA_GABA  EXA_Glut   BF_Glut OlfC_Glut  HiF_GABA  CTX_GABA  THM_GABA  AMY_GABA  AMY_Glut   BF_GABA 
+#         2         9        14        19        20        23        42        55        62        79        80 
+#  HTH_GABA  HTH_Glut  HiF_Glut  CTX_Glut   MB_GABA   MB_Glut  THM_Glut 
+#        87        88       103       127       139       148       191 
+
+useable_regions <- setdiff(useable_regions, c("Multi", "OlfC"))
+
+# > useable_regions
+# [1] "AMY" "BF"  "CTX" "EXA" "HiF" "HTH" "MB"  "THM"
+```
+
+So vs before, I'm only adding HiF as a new region.
+
+# Normalize matrix
+
+```{r}
+mat_norm <- edgeR::cpm(mat)
+```
+
+Z-scoring the whole matrix is expensive, so will only do as needed.
+
+# Heatmap code (cands_by_region)
+
+the essence:
+
+```{r}
+# mat_norm %>% 
+#     .[unlist(top20_peaks_by_region), ] %>% 
+#     t %>% 
+#     scale %>% 
+#     t %>% 
+#     .[, colnames(.) %in% rownames(subset(obs, Dominant_Region %in% useable_regions))] ->
+#     mat_sub
+```
+
+
+```{r}
+make_heatmap <- function(cands_by_region, regions = useable_regions, Z_CLIP=6) {
+    
+    ## ---------------- config ----------------
+    region_levels <- regions                         # enforce this order for rows & cols
+    region_pal    <- setNames(brewer.pal(length(region_levels), "Set2"), region_levels)
+    
+    # preferred NT ordering (others appended afterward)
+    nt_preferred  <- c("Glut", "GABA")
+    
+    # heatmap colors
+    hm_cols <- colorRamp2(c(-Z_CLIP, 0, Z_CLIP), c("#38598C", "white", "#B40426"))
+    
+    ## -------- rows (peaks) from top20 lists, grouped by region ----------
+    peaks_concat <- unlist(cands_by_region[region_levels], use.names = FALSE)
+    peaks_concat <- peaks_concat[!is.na(peaks_concat)]
+    
+    peak_region_vec <- unlist(
+        lapply(region_levels, function(rg) rep(rg, length(cands_by_region[[rg]]))),
+        use.names = FALSE
+    )
+    peak_region_vec <- peak_region_vec[seq_along(peaks_concat)]
+    peak_region_fac <- factor(peak_region_vec, levels = region_levels)
+    
+    ## ------- columns (clusters), grouped by region, THEN ordered by NT ------
+    # keep only clusters in the chosen regions
+    obs_sub <- obs %>%
+        filter(Dominant_Region %in% region_levels)
+    
+    # NT levels: preferred first (if present), then all remaining NTs
+    nt_all     <- as.character(obs_sub$NT)
+    nt_levels  <- c(nt_preferred[nt_preferred %in% nt_all],
+                    setdiff(sort(unique(nt_all)), nt_preferred))
+    
+    # palette for NTs (works for any # of categories)
+    nt_pal <- setNames(colorRampPalette(brewer.pal(9, "Set1"))(length(nt_levels)), nt_levels)
+    
+    # enforce factor levels and order columns by Region -> NT -> original order
+    obs_sub <- obs_sub %>%
+        mutate(
+            Dominant_Region = factor(as.character(Dominant_Region), levels = region_levels),
+            NT = factor(as.character(NT), levels = nt_levels)
+        )
+    col_order <- rownames(arrange(obs_sub, Dominant_Region, NT))
+    col_region_fac <- factor(as.character(obs_sub[col_order, "Dominant_Region", drop = TRUE]),
+                             levels = region_levels)
+    col_nt_fac     <- factor(as.character(obs_sub[col_order, "NT", drop = TRUE]),
+                             levels = nt_levels)
+    
+    ## -------- matrix subset + z-score per peak (row) ----------
+    peaks_present <- intersect(peaks_concat, rownames(mat_norm))
+    if (length(peaks_present) == 0) 
+        stop("No selected peaks found in matrix.")
+    
+    keep_idx <- peaks_concat %in% peaks_present
+    peaks_concat    <- peaks_concat[keep_idx]
+    peak_region_fac <- droplevels(peak_region_fac[keep_idx])
+    
+    mat_sub <- mat_norm[peaks_concat, col_order, drop = FALSE]
+    mat_z <- t(scale(t(mat_sub)))
+    mat_z[is.na(mat_z)] <- 0
+    mat_z[mat_z >  Z_CLIP] <-  Z_CLIP
+    mat_z[mat_z < -Z_CLIP] <- -Z_CLIP
+    
+    ## -------------- annotations ---------------
+    row_anno <- rowAnnotation(
+        PeakRegion = peak_region_fac,
+        col = list(PeakRegion = region_pal),
+        show_annotation_name = TRUE,
+        annotation_name_side = "top",
+        annotation_legend_param = list(title = "Peak region")
+    )
+    
+    top_anno <- HeatmapAnnotation(
+        ClusterRegion = col_region_fac,
+        NT            = col_nt_fac,
+        col = list(
+            ClusterRegion = region_pal,
+            NT            = nt_pal
+        ),
+        show_annotation_name = TRUE,
+        annotation_name_side = "left",
+        annotation_height = unit(c(3, 3), "mm")  # tweak bar heights if needed
+    )
+    
+    ## -------------- heatmap -------------------
+    ht <- Heatmap(
+        mat_z,
+        name = "z",
+        col = hm_cols,
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = FALSE,
+        show_column_names = FALSE,
+        row_split = peak_region_fac,      # row slice order follows region_levels
+        column_split = col_region_fac,    # column slice order follows region_levels
+        top_annotation = top_anno,
+        left_annotation = row_anno,
+        row_gap = unit(2, "mm"),
+        column_gap = unit(2, "mm"),
+        border = TRUE,
+        column_title = "clusters grouped by dominant region & neurotransmitter",
+        row_title = "candidate peaks grouped by region"
+    )
+    return(ht)
+}
+```
+
+
+# Ensure sharing across NTs
+
+## Peak specificity by region+NT
+
+Copy most of code above, but do the specificity by region+NT:
+
+```{r}
+peak_sums <- rowSums(mat_norm)
+```
+
+```{r}
+regions_nt <- unlist(lapply(useable_regions, paste0, "_", c("GABA", "Glut")))
+```
+
+```{r}
+peak_sums_regions_nt <- lapply(regions_nt, function(rg_nt) {
+    rg <- sub("_.*", "", rg_nt)
+    nt <- sub(".*_", "", rg_nt)
+    idx <- which(
+        (obs$Dominant_Region == rg) & (obs$NT == nt)
+    )
+    rowSums(mat_norm[, idx])
+})
+names(peak_sums_regions_nt) <- regions_nt
+```
+
+```{r}
+frac_in_region_nt <- lapply(peak_sums_regions_nt, "/", peak_sums)
+```
+
+## Peak specificity by region only (use only GABA/Glut)
+
+Used later on.
+
+```{r}
+peak_sums_regions <- lapply(useable_regions, function(rg) {
+    idx <- which(
+        (obs$Dominant_Region == rg) & (obs$NT %in% c("GABA", "Glut"))
+    )
+    rowSums(mat_norm[, idx])
+})
+names(peak_sums_regions) <- useable_regions
+```
+
+```{r}
+frac_in_region <- lapply(peak_sums_regions, "/", peak_sums)
+```
+
+## Plot region+NT expression vs. specificity
+
+```{r}
+# for (rg_nt in regions_nt) {
+#     plot(log10(peak_sums_regions_nt[[rg_nt]]), frac_in_region_nt[[rg_nt]], main=rg_nt)
+# }
+```
+
+
+Although, I have to say, the units are so impossible to comprehend. Each cluster
+is normalized to have a million reads, and there are 1810 clusters. If
+every peak were even, each peak would have 2.16 normalized reads in each cluster,
+which would sum to 3911 reads across all clusters (log10=3.6). But each region
+only has a minority of clusters, so the sum is kind of hard to interpret. 
+Instead, a better unit would be to average the clusters, so at least there's 
+some kind of normalization between the regions (and some interpretability).
+
+In this case, the "average" peak would be 2.16 normalized reads in each cluster,
+or 0.33 on the x-axis.
+
+**Note:** this and basically the same plots are repeated below, but they can 
+make even good peaks look bad if they're only in subsets of the selected 
+clusters. However, those peaks will also look bad in the genome browser because
+of the heterogeneity in the grouping variable.
+
+
+```{r}
+for (rg_nt in regions_nt) {
+    rg <- sub("_.*", "", rg_nt)
+    nt <- sub(".*_", "", rg_nt)
+    idx <- which(
+        (obs$Dominant_Region == rg) & (obs$NT == nt)
+    )
+    plot(log10(peak_sums_regions_nt[[rg_nt]] / length(idx)), frac_in_region_nt[[rg_nt]], 
+         main=rg_nt, 
+         xlab="log10[avg cpm in region+NT clusters]", 
+         ylab="fraction of peak's reads in region+NT")
+}
+```
+
+*To improve*: Need to show everything, the exp/specificity in each NT side-by-side,
+but maybe color points by the combined ranks (or highlight the top ones), and
+maybe also a rank-rank plot side-by-side with those...
+[done below, after getting combined ranks]
+
+MB Glut is really weak.
+
+Otherwise, real signal seems to be important for having a high rank, so I think
+the ranks are useable as-is.
+
+Get ranks of each peak in each region+nt [higher is more expressed]:
+
+## Candidates via combined ranks
+
+### Get combined ranks (Glut&GABA)
+
+```{r}
+ranks_frac_by_region_nt <- lapply(frac_in_region_nt, rank)
+```
+
+```{r}
+# for later, not used right here
+ranks_frac_by_region <- lapply(frac_in_region, rank)
+```
+
+
+For each region and peak, get the combined ranks of the Glut+GABA:
+
+```{r}
+comb_ranks_of_nt_by_region <- lapply(useable_regions, function(rg) {
+    nm_glut <- paste0(rg, "_Glut")
+    nm_gaba <- paste0(rg, "_GABA")
+    out <- ranks_frac_by_region_nt[[nm_glut]] + ranks_frac_by_region_nt[[nm_gaba]]
+    names(out) <- names(ranks_frac_by_region_nt[[nm_glut]]) # =rownames(mat)
+    out
+})
+names(comb_ranks_of_nt_by_region) <- useable_regions
+```
+
+Later on, I end up using the reverse ranks for stuff, not sure if I should do
+that for everything.
+
+### Plot specificity vs. expression & combined ranks
+
+3 plots side-by-side: exp-vs-specificity for each NT, and then also plot 
+specificities against. In all 3, color by combined rank (or maybe just the top20).
+
+```{r}
+dir_plt <- file.path(pdir_plots, "plots_diagnostic_combined_spec_ranks")
+if (!dir.exists(dir_plt))
+    dir.create(dir_plt)
+```
+
+
+```{r, fig.width=16, fig.height=6}
+# will show the avg cpm in a cluster for if all peaks were uniformly distributed
+exp_for_unif <- log10(1e6 / nrow(mat))
+
+# total peaks (for recalculating ranks)
+n_peaks <- nrow(mat)
+
+for (rg in useable_regions) {
+    rg_gl <- paste0(rg, "_Glut")
+    rg_ga <- paste0(rg, "_GABA")
+    ncl_gl <- length(which((obs$Dominant_Region == rg) & (obs$NT == "Glut")))
+    ncl_ga <- length(which((obs$Dominant_Region == rg) & (obs$NT == "GABA")))
+    
+    # for these plots, invert rank so it's easy to highlight the top ones using
+    # log scaling (naturally highlights the lowest numbers, smears together the
+    # highest). Because combined ranks have weird numbers (variable ranges),
+    # will calculate the rank of the combined-ranks, and then invert those
+    # ranks
+    
+    df_gl <- data.frame(
+        avg_exp    = log10(peak_sums_regions_nt[[rg_gl]] / ncl_gl),
+        frac_reads = frac_in_region_nt[[rg_gl]],
+        comb_rank  = n_peaks - rank(comb_ranks_of_nt_by_region[[rg]])
+    ) %>% 
+        .[order(.$comb_rank, decreasing = TRUE), ]
+    df_ga <- data.frame(
+        avg_exp    = log10(peak_sums_regions_nt[[rg_ga]] / ncl_ga),
+        frac_reads = frac_in_region_nt[[rg_ga]],
+        comb_rank  = n_peaks - rank(comb_ranks_of_nt_by_region[[rg]])
+    ) %>% 
+        .[order(.$comb_rank, decreasing = TRUE), ]
+    
+    df_ss <- data.frame(
+        frac_gl = frac_in_region_nt[[rg_gl]],
+        frac_ga = frac_in_region_nt[[rg_ga]],
+        comb_rank = n_peaks - rank(comb_ranks_of_nt_by_region[[rg]])
+    ) %>% 
+        .[order(.$comb_rank, decreasing = TRUE), ]
+    
+    p1 <- ggplot(df_gl, aes(avg_exp, frac_reads, color = comb_rank)) +
+        geom_point() +
+        geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
+        scale_color_viridis_c(trans="log10", direction=-1) + 
+        labs(
+            title = rg_gl, 
+            x = paste0("avg cpm in ", rg_gl, " clusters (log10)"),
+            y = paste0("peak specificity\n(fraction normalized reads in ", rg_gl, ")"),
+            color = "combined specificity\nranks, in reverse-rank\norder"
+        ) + 
+        theme_md_classic()
+    
+    p2 <- ggplot(df_ga, aes(avg_exp, frac_reads, color = comb_rank)) +
+        geom_point() +
+        geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
+        scale_color_viridis_c(trans="log10", direction=-1) + 
+        labs(
+            title = rg_ga, 
+            x = paste0("avg cpm in ", rg_ga, " clusters (log10)"),
+            y = paste0("peak specificity\n(fraction normalized reads in ", rg_ga, ")"),
+            color = "combined specificity\nranks, in reverse-rank\norder"
+        ) + 
+        theme_md_classic()
+    
+    p3 <- ggplot(df_ss, aes(frac_gl, frac_ga, color = comb_rank)) + 
+        geom_point() + 
+        geom_abline(slope = 1, intercept = 0, linewidth = 0.25) +
+        scale_color_viridis_c(trans="log10", direction=-1) + 
+        labs(
+            title = rg,
+            x = "peak specificity Glut", 
+            y = "peak specificity GABA", 
+            color = "combined specificity\nranks, in reverse-rank\norder"
+        ) + 
+        theme_md_classic()
+    
+    ggsave(
+        file.path(dir_plt, paste0(rg, ".png")),
+        p1 + p2 + p3 + plot_layout(guides = "collect"),
+        width = 16, height = 6
+    )
+}
+```
+
+I think what I've done is better than if I had added together the actual 
+specificity scores because those could be blown out by really specific peaks in
+one NT, whereas this flattens that quantitative issue.
+
+### Heatmap top20 by combined rank
+
+For each region, get the top20 peaks by combined rank (in Glut & GABA):
+
+```{r}
+top20_peaks_by_comb_rank_region <- lapply(comb_ranks_of_nt_by_region, function(x) {
+    ord <- order(x)
+    idx <- tail(ord, 20)
+    rownames(mat_norm)[idx]
+})
+```
+
+```{r, fig.width=20, fig.height=20}
+ht <- make_heatmap(top20_peaks_by_comb_rank_region)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_top20_by_combined_rank.pdf"),
+    width=20, height=16
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+invisible(dev.off())
+```
+
+You know, I think this logic should work? But maybe funny things can happen
+when the NTs aren't balanced, the ranks might not combine in the best way for
+truly shared peaks.
+
+But there's also an issue when you look for the peaks with highest regional
+enrichment due to the imbalance.
+
+Overall it looks like I am finding shared peaks, but it's not always clear to 
+me that the specificity is high for the region.
+
+The confusion between THM_GABA and MB_GABA is weird looking. It's basically that
+THM_GABA clusters have some of the MB peaks. But the MB signal is maybe weakest
+so maybe not surprising...
+
+### Heatmap top40 by combined rank
+
+```{r}
+top40_peaks_by_comb_rank_region <- lapply(comb_ranks_of_nt_by_region, function(x) {
+    ord <- order(x)
+    idx <- tail(ord, 40)
+    rownames(mat_norm)[idx]
+})
+```
+
+```{r, fig.width=20, fig.height=20}
+ht <- make_heatmap(top40_peaks_by_comb_rank_region)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+```
+
+```{r}
+pdf(
+    file.path(pdir_plots, "heatmap_top40_by_combined_rank.pdf"),
+    width=20, height=16
+)
+draw(ht, heatmap_legend_side = "right", annotation_legend_side = "right")
+invisible(dev.off())
+```
+
+
+### Show top20
+
+```{r}
+top20_peaks_by_comb_rank_region
+```
+
+#### Compare to old
+
+```{r}
+old_top20 <- regions <- list(
+    AMY = c(
+        "chr7:89169956-89170457","chr1:134734396-134734897","chr20:30696426-30696927","chr8:9293521-9294022",
+        "chr9:25196208-25196709","chr6:12846449-12846950","chr13:20226328-20226829","chr10:48066605-48067106",
+        "chr9:5141919-5142420","chr3:125725186-125725687","chr1:97069453-97069954","chr6:52718954-52719455",
+        "chr22:28363341-28363842","chr1:90098657-90099158","chr6:110711076-110711577","chr3:130291474-130291975",
+        "chr2:24853471-24853972","chr14:29082521-29083022","chr4:62683198-62683699","chr7:153638958-153639459"
+    ),
+    BF = c(
+        "chr21:28675447-28675948","chr3:74595975-74596476","chr12:107700980-107701481","chr15:94203144-94203645",
+        "chr6:112503562-112504063","chr10:34901936-34902437","chr18:45821554-45822055","chr9:51364440-51364941",
+        "chrX:105607316-105607817","chr12:45375721-45376222","chr8:71198924-71199425","chr3:77878179-77878680",
+        "chr8:63411878-63412379","chr4:135929439-135929940","chr8:10351912-10352413","chr2:186922040-186922541",
+        "chr8:85581086-85581587","chr16:73385945-73386446","chr4:106028604-106029105","chr3:62899453-62899954"
+    ),
+    CTX = c(
+        "chr19:40693362-40693863","chr6:32290248-32290749","chr16:59116292-59116793","chr8:75401621-75402122",
+        "chr5:88674606-88675107","chr5:133850462-133850963","chr1:185492437-185492938","chr20:33850738-33851239",
+        "chr12:16813068-16813569","chr8:94308719-94309220","chr4:66899700-66900201","chr6:117417005-117417506",
+        "chr16:50374945-50375446","chr6:141695513-141696014","chr6:87730103-87730604","chr11:113374057-113374558",
+        "chr4:65792051-65792552","chr13:111509492-111509993","chr14:53065634-53066135","chr9:74625336-74625837"
+    ),
+    EXA = c(
+        "chr17:45634918-45635419","chr6:91184076-91184577","chr11:66940060-66940561","chr1:18531197-18531698",
+        "chr6:128865034-128865535","chr4:50515292-50515793","chr19:2644959-2645460","chr4:41900658-41901159",
+        "chr6:88548877-88549378","chr11:35868845-35869346","chr12:13093257-13093758","chr2:109832680-109833181",
+        "chr21:25368539-25369040","chr12:101449832-101450333","chr1:56633199-56633700","chr10:37825528-37826029",
+        "chr6:43206042-43206543","chr5:110106528-110107029","chr1:1247570-1248071","chr10:111014542-111015043"
+    ),
+    HTH = c(
+        "chr12:16908571-16909072","chr11:55239964-55240465","chr6:98453798-98454299","chr2:95006479-95006980",
+        "chr8:52928378-52928879","chr17:23766848-23767349","chr1:107692263-107692764","chr10:118457242-118457743",
+        "chr5:109704627-109705128","chr1:99247854-99248355","chr13:81871767-81872268","chr10:82627150-82627651",
+        "chr2:43926058-43926559","chrX:38433322-38433823","chr12:19398144-19398645","chr7:26376887-26377388",
+        "chr10:3963806-3964307","chr9:115423313-115423814","chr15:89733192-89733693","chr14:59684701-59685202"
+    ),
+    MB = c(
+        "chr10:79496891-79497392","chr14:27130740-27131241","chr1:87988454-87988955","chr12:16604411-16604912",
+        "chr15:81205091-81205592","chr3:167080234-167080735","chr9:73581466-73581967","chr13:92159463-92159964",
+        "chr2:161950521-161951022","chr13:101642380-101642881","chr10:53975505-53976006","chr1:149655244-149655745",
+        "chr3:42256122-42256623","chr14:15843732-15844233","chr11:85446969-85447470","chr8:89120018-89120519",
+        "chr10:60352668-60353169","chr15:56898570-56899071","chr14:82947006-82947507","chr13:21052531-21053032"
+    ),
+    THM = c(
+        "chr3:16804434-16804935","chr18:32268593-32269094","chr15:38472414-38472915","chr4:157387485-157387986",
+        "chr4:29421699-29422200","chr14:65043314-65043815","chr3:112829305-112829806","chr4:69204643-69205144",
+        "chr4:21118968-21119469","chr19:11756915-11757416","chr1:15433900-15434401","chr20:3089302-3089803",
+        "chr13:63670235-63670736","chr16:28192752-28193253","chr8:29509342-29509843","chr15:3970350-3970851",
+        "chr14:96658991-96659492","chr13:53831227-53831728","chr5:140077378-140077879","chr8:23519098-23519599"
+    )
+)
+```
+
+```{r}
+# Map(
+#     function(x, y) {
+#         int <- length(intersect(x, y))
+#         uni <- length(union(x, y))
+#         int / uni
+#     },
+#     old_top20,
+#     top20_peaks_by_comb_rank_region[names(old_top20)]
+# )
+# $AMY
+# [1] 0.05263158
+# 
+# $BF
+# [1] 1
+# 
+# $CTX
+# [1] 0.2121212
+# 
+# $EXA
+# [1] 1
+# 
+# $HTH
+# [1] 0.9047619
+# 
+# $MB
+# [1] 0.8181818
+# 
+# $THM
+# [1] 1
+```
+
+No changes in EXA, THM, some in HTH, some more in MB (but not a ton).
+But big changes in CTX (mostly changed) and AMY is nothing like it was before.
+
+
+Below, I found that there are like 50% more clusters in AMY now.
+
+#### [OLD] Show top20
+
+Not updated since some updates to taxonomy and adding HiF (and more CTX clusters)
+for this analysis. But above I see most are similar (except really AMY and CTX).
+
+```{r}
+top20_peaks_by_comb_rank_region
+```
+
+```
+$AMY
+ [1] "chr7:89169956-89170457"   "chr1:134734396-134734897" "chr20:30696426-30696927"  "chr8:9293521-9294022"    
+ [5] "chr9:25196208-25196709"   "chr6:12846449-12846950"   "chr13:20226328-20226829"  "chr10:48066605-48067106" 
+ [9] "chr9:5141919-5142420"     "chr3:125725186-125725687" "chr1:97069453-97069954"   "chr6:52718954-52719455"  
+[13] "chr22:28363341-28363842"  "chr1:90098657-90099158"   "chr6:110711076-110711577" "chr3:130291474-130291975"
+[17] "chr2:24853471-24853972"   "chr14:29082521-29083022"  "chr4:62683198-62683699"   "chr7:153638958-153639459"
+
+$BF
+ [1] "chr21:28675447-28675948"   "chr3:74595975-74596476"    "chr12:107700980-107701481"
+ [4] "chr15:94203144-94203645"   "chr6:112503562-112504063"  "chr10:34901936-34902437"  
+ [7] "chr18:45821554-45822055"   "chr9:51364440-51364941"    "chrX:105607316-105607817" 
+[10] "chr12:45375721-45376222"   "chr8:71198924-71199425"    "chr3:77878179-77878680"   
+[13] "chr8:63411878-63412379"    "chr4:135929439-135929940"  "chr8:10351912-10352413"   
+[16] "chr2:186922040-186922541"  "chr8:85581086-85581587"    "chr16:73385945-73386446"  
+[19] "chr4:106028604-106029105"  "chr3:62899453-62899954"   
+
+$CTX
+ [1] "chr19:40693362-40693863"   "chr6:32290248-32290749"    "chr16:59116292-59116793"  
+ [4] "chr8:75401621-75402122"    "chr5:88674606-88675107"    "chr5:133850462-133850963" 
+ [7] "chr1:185492437-185492938"  "chr20:33850738-33851239"   "chr12:16813068-16813569"  
+[10] "chr8:94308719-94309220"    "chr4:66899700-66900201"    "chr6:117417005-117417506" 
+[13] "chr16:50374945-50375446"   "chr6:141695513-141696014"  "chr6:87730103-87730604"   
+[16] "chr11:113374057-113374558" "chr4:65792051-65792552"    "chr13:111509492-111509993"
+[19] "chr14:53065634-53066135"   "chr9:74625336-74625837"   
+
+$EXA
+ [1] "chr17:45634918-45635419"   "chr6:91184076-91184577"    "chr11:66940060-66940561"  
+ [4] "chr1:18531197-18531698"    "chr6:128865034-128865535"  "chr4:50515292-50515793"   
+ [7] "chr19:2644959-2645460"     "chr4:41900658-41901159"    "chr6:88548877-88549378"   
+[10] "chr11:35868845-35869346"   "chr12:13093257-13093758"   "chr2:109832680-109833181" 
+[13] "chr21:25368539-25369040"   "chr12:101449832-101450333" "chr1:56633199-56633700"   
+[16] "chr10:37825528-37826029"   "chr6:43206042-43206543"    "chr5:110106528-110107029" 
+[19] "chr1:1247570-1248071"      "chr10:111014542-111015043"
+
+$HTH
+ [1] "chr12:16908571-16909072"   "chr11:55239964-55240465"   "chr6:98453798-98454299"   
+ [4] "chr2:95006479-95006980"    "chr8:52928378-52928879"    "chr17:23766848-23767349"  
+ [7] "chr1:107692263-107692764"  "chr10:118457242-118457743" "chr5:109704627-109705128" 
+[10] "chr1:99247854-99248355"    "chr13:81871767-81872268"   "chr10:82627150-82627651"  
+[13] "chr2:43926058-43926559"    "chrX:38433322-38433823"    "chr12:19398144-19398645"  
+[16] "chr7:26376887-26377388"    "chr10:3963806-3964307"     "chr9:115423313-115423814" 
+[19] "chr15:89733192-89733693"   "chr14:59684701-59685202"  
+
+$MB
+ [1] "chr10:79496891-79497392"   "chr14:27130740-27131241"   "chr1:87988454-87988955"   
+ [4] "chr12:16604411-16604912"   "chr15:81205091-81205592"   "chr3:167080234-167080735" 
+ [7] "chr9:73581466-73581967"    "chr13:92159463-92159964"   "chr2:161950521-161951022" 
+[10] "chr13:101642380-101642881" "chr10:53975505-53976006"   "chr1:149655244-149655745" 
+[13] "chr3:42256122-42256623"    "chr14:15843732-15844233"   "chr11:85446969-85447470"  
+[16] "chr8:89120018-89120519"    "chr10:60352668-60353169"   "chr15:56898570-56899071"  
+[19] "chr14:82947006-82947507"   "chr13:21052531-21053032"  
+
+$THM
+ [1] "chr3:16804434-16804935"   "chr18:32268593-32269094"  "chr15:38472414-38472915"  "chr4:157387485-157387986"
+ [5] "chr4:29421699-29422200"   "chr14:65043314-65043815"  "chr3:112829305-112829806" "chr4:69204643-69205144"  
+ [9] "chr4:21118968-21119469"   "chr19:11756915-11757416"  "chr1:15433900-15434401"   "chr20:3089302-3089803"   
+[13] "chr13:63670235-63670736"  "chr16:28192752-28193253"  "chr8:29509342-29509843"   "chr15:3970350-3970851"   
+[17] "chr14:96658991-96659492"  "chr13:53831227-53831728"  "chr5:140077378-140077879" "chr8:23519098-23519599"  
+```
+
+##### Check THM peaks [unchanged old/new]
+
+Any of these in THM? [These were from the t-test comparison I did]
+```
+chr3:112829305-112829806 - PRKG2 --> [! Yes !]
+chr20:3089302-3089803 - N4BP1    --> [! Yes !]
+chr14:96658991-96659492 - MYCN   --> [! Yes !]
+chr21:35041324-35041825 - KRTAP11-1
+chr6:109199439-109199940 - CABIN2, TMEFF2
+chr8:108284386-108284887 - MTPN
+chr7:136760087-136760588 - PRMT6 (with NTNG1 - https://pmc.ncbi.nlm.nih.gov/articles/PMC4000137/)
+```
+
+It looks like only the top3 carry over.
+
+chr18:32268593-32269094  RGS4 (intragenic) really good
+chr15:38472414-38472915  CAPD4 pretty good
+chr4:29421699-29422200  w/e
+chr4:21118968-21119469 BMP6 (intragenic) not bad
+chr1:15433900-15434401 PCCA (intragenic) not terrible...
+chr20:3089302-3089803  N4BP1 good [saw before]
+chr16:28192752-28193253 TSPYL5 (repressor?) 
+chr14:96658991-96659492 CYRIA (did I see that somewhere before?) doesn't look amazing
+
+chr5:140077378-140077879 ATP12A looks amazing ; but I checked and not in a GRN
+
+##### Check HTH peaks [mostly unchanged]
+(below not updated for updated regional annotations).
+
+These had some of the most impressive peak sharing enrichment scores w/ DESeq2 
+so let's see...
+
+A lot don't look that good but a shocking portion share peaks with the 
+"GABA-Glut" types (mostly EXA Glut-GABA, sometimes THM Glut-GABA), like this:
+chr1:99247854-99248355
+
+But those peaks don't look good, generally they don't look good.
+
+
+# Segregate regional clusters by candidate peak signal
+
+In most/all cases, I can find a number of peaks shared between Glut & GABA, but
+usually it's only a (consistent) subset of clusters within each NT that have
+the peaks, and the other ones don't (often in both NTs).
+
+It would be *tremendous* to discover, for instance, that the clusters that lack
+those peaks are maybe less localized, so I want to aim to identify the clusters
+that have the peaks vs. those that don't, and check their spatial mappings
+visually.
+
+I have the idea that kmeans w/ k=2 will basically sort the high-vs-low signal
+clusters within each Dominant_Region.
+
+```{r}
+divide_clusters_by_candidates <- function(rg, cands_by_region) {
+    # uses obs, mat_norm from global env
+    cl <- rownames(obs)[which(obs$Dominant_Region == rg)]
+    pk <- cands_by_region[[rg]]
+    
+    # zscore across all clusters before subset to clusters in region
+    zmat <- t(scale(t(mat_norm[pk, ])))[, cl] 
+    
+    # divide clusters into 2 groups (hopefully "haves" and "have nots")
+    cl_km <- kmeans(t(zmat), 2)
+    
+    # find the high-signal cluster [equal voting, not weighted by signal]
+    cl_km_hi <- ifelse(
+        (sum(cl_km$centers[1,] > cl_km$centers[2,]) / length(pk)) > 0.5,
+        1, 2
+    )
+    
+    hi_cl <- names(cl_km$cluster)[cl_km$cluster == cl_km_hi]
+    lo_cl <- names(cl_km$cluster)[cl_km$cluster != cl_km_hi]
+    
+    list(
+        cl       = cl,       # region cluster names
+        pk       = pk,       # candidate peak names
+        zmat     = zmat,     # zscored signal matrix (candidate peaks by region clusters)
+        cl_km    = cl_km,    # kmeans cluster object
+        cl_km_hi = cl_km_hi, # index of the kmeans cluster (1 or 2) that is high signal
+        hi_cl    = hi_cl,    # clusters in the high signal kmeans group
+        lo_cl    = lo_cl     # "             "  low signal "          "
+    )
+}
+```
+
+```{r}
+grouped_clusts_by_candidates <- lapply(
+    useable_regions, 
+    divide_clusters_by_candidates, 
+    top40_peaks_by_comb_rank_region
+)
+names(grouped_clusts_by_candidates) <- useable_regions
+```
+
+First, check if the kmeans groups are generally "low/hi" groupings:
+(low being little candidate peak accessibility overall):
+
+```{r}
+# check if they are generally "low/hi" clusters
+sapply(grouped_clusts_by_candidates, function(x) {
+    h <- x$cl_km_hi
+    l <- ifelse(h==1, 2, 1)
+    sum(x$cl_km$centers[h, ] > x$cl_km$centers[l, ]) / length(x$pk)
+})
+#   AMY    BF   CTX   EXA   HiF   HTH    MB   THM 
+# 1.000 0.975 0.725 0.700 0.925 0.800 0.950 0.975 
+
+### OLD:
+#   AMY    BF   CTX   EXA   HTH    MB   THM 
+# 1.000 0.975 0.825 0.500 0.800 0.900 0.975 
+```
+
+This time they mostly all breakdown by high-vs-low signal for candidate peaks.
+
+And tabulate the breakdown of the candidate peaks:
+
+```{r}
+# total clusters
+lengths(lapply(grouped_clusts_by_candidates, "[[", "cl"))
+# AMY  BF CTX EXA HiF HTH  MB THM 
+# 141 100 169  24 126 205 324 248 
+
+### vs. before updated regions
+# AMY  BF CTX EXA HTH  MB THM 
+#  93 100 132  24 203 329 248 
+
+
+# high, low
+lapply(grouped_clusts_by_candidates, function(x) {
+    c(length(x$hi_cl), length(x$lo_cl))
+})
+# $AMY
+# [1] 53 88   # <- ~38% in high
+# 
+# $BF
+# [1] 43 57
+# 
+# $CTX
+# [1] 95 74  # <- 56% in high
+# 
+# $EXA       
+# [1]  5 19
+# 
+# $HiF
+# [1] 83 43
+# 
+# $HTH
+# [1]  50 155
+# 
+# $MB
+# [1]  70 254
+# 
+# $THM
+# [1] 116 132
+
+### OLD:
+# $AMY
+# [1] 37 56   # <- ~40% in high
+# 
+# $BF
+# [1] 43 57
+# 
+# $CTX 
+# [1] 70 62   # <- 53% in high
+# 
+# $EXA
+# [1]  2 22   # (before had seen breakdown wasn't about hi-vs-lo)
+# 
+# $HTH
+# [1]  49 154
+# 
+# $MB
+# [1]  75 254
+# 
+# $THM
+# [1] 116 132
+```
+
+## (!) Export regional clusters high-vs-low groups
+
+```{r}
+if (!dir.exists(file.path(outdir, "data")))
+    dir.create(file.path(outdir, "data"))
+
+dir_sv <- file.path(outdir, "data/regional_clusts_by_candidate_signal")
+if (!dir.exists(dir_sv))
+    dir.create(dir_sv)
+
+for (rg in names(grouped_clusts_by_candidates)) {
+    write(
+        grouped_clusts_by_candidates[[rg]][["hi_cl"]],
+        file.path(dir_sv, paste0(rg, "_High.txt"))
+    )
+    write(
+        grouped_clusts_by_candidates[[rg]][["lo_cl"]],
+        file.path(dir_sv, paste0(rg, "_Low.txt"))
+    )
+}
+```
+
+
+## Check group segregation by signal for all
+
+### Print
+
+```{r}
+lapply(grouped_clusts_by_candidates, function(x) {
+    data.frame(
+        sig_group  = rep(c("high", "low"), c(length(x$hi_cl), length(x$lo_cl))),
+        cluster    = c(x$hi_cl, x$lo_cl)
+    ) %>% 
+        mutate(
+            Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+        ) %>% 
+        .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+        table %>% 
+        t %>% 
+        .[order(.[,"high"], decreasing = TRUE), ]
+})
+```
+
+```
+$AMY
+                           sig_group
+Subcortex_Group_v4          high low
+  CEN-SLEA-BST GABA           16  14
+  AHA Glut                     8   3
+  BM-Co Glut                   8   1
+  PL-ERC-PEA-BL-BM Glut        7   1
+  BL-ERC-PEA Glut              4   0
+  AMY-ERC-PPalC Glut           3   2
+  BL Glut                      3   2
+  AAA-Me-BST Glut              2  18
+  AMY Glut                     1   4
+  La Glut                      1   1
+  ACEN SST GABA                0   1
+  AMY-STR NUDAP-ITC MSN        0   9
+  CTX PVALB Chandelier GABA    0   1
+  La-BL-BM Glut                0  10
+  Me-BST-AAA GABA              0  15
+  STR LYPD6-RSPO2 GABA         0   1
+  STR SST-RSPO2 GABA           0   3
+  VIP GABA                     0   2
+
+$BF
+                                    sig_group
+Subcortex_Group_v4                   high low
+  LSd PRDM12 ZEB2 GABA                 11   0
+  LSX PRDM12 SLIT2 GABA                 8   0
+  LSX MET ETV1 GABA                     4   0
+  LSX NKX2-1 CHAT GABA                  4   0
+  LSX OTX2 GABA                         4   0
+  LSX SALL3 MET GABA                    3   0
+  NDB-MPA-PeVTu TBR1 Glut               3   1
+  BF SKOR1 Glut                         2  11
+  LSX NKX2-1 OTX2 GABA                  2   0
+  LSX PRDM12 NTS GABA                   2   0
+  BF-HTH GABA                           0   5
+  BF-HTH LHX6-CHST9 GABA                0   7
+  BF-HTH-MB SALL3 PAX6 GABA             0   8
+  MS BSX Glut                           0   1
+  NDB-SI LHX6-LHX8 GABA                 0  10
+  NDB-SI-MPA-LPA LHX6-LHX8-GBX1 GABA    0  12
+  SEPc Glut                             0   2
+
+$CTX
+                           sig_group
+Subcortex_Group_v4          high low
+  L5-6 IT CTX-PArCx Glut      31   2
+  L2-3 IT CTX Glut            18   1
+  L4-5 IT CTX-PArCx Glut      17   0
+  STR SST-RSPO2 GABA          13   0
+  STR LYPD6-RSPO2 GABA         5   0
+  L2-3 IT RSC Glut             4   1
+  CTX PVALB GABA               2   0
+  L5 ET CTX-PArCx Glut         2   2
+  L2 IT PArCx-ArCx Glut        1   1
+  L5-6 NP CTX-PArCx Glut       1   2
+  L6 CT CTX-PArCx Glut         1  27
+  CTX PVALB Chandelier GABA    0   1
+  L5 PrS Glut                  0   1
+  L6b CT ERC Glut              0  11
+  L6b CTX-PArCx Glut           0   4
+  LAMP5-CXCL14 GABA            0   3
+  LAMP5-LHX6 GABA              0   1
+  STR SST-CHODL GABA           0   1
+  VIP GABA                     0  16
+
+$EXA
+                            sig_group
+Subcortex_Group_v4           high low
+  BST-MPA-MeR-PeV GABA          3   7
+  BST EBF2 Glut                 2   0
+  BST-EA-HTH SAMD3-TP73 Glut    0  12
+
+$HiF
+                             sig_group
+Subcortex_Group_v4            high low
+  CA3 Glut                      32   1
+  CA1-ProS Glut                 15   0
+  SUB-ProS Glut                 10   2
+  STR SST-RSPO2 GABA             9   0
+  LAMP5-LHX6 GABA                5   0
+  CA2-CA3-IG Glut                3   0
+  NDNF GABA                      3   1
+  DG MC Glut                     2   0
+  L2-3 IT ERC-Pir Glut           1   7
+  SOX13 GABA                     1   0
+  STR LYPD6-RSPO2 GABA           1   0
+  VIP GABA                       1   1
+  CTX PVALB Chandelier GABA      0   1
+  DG Glut                        0  14
+  L2-3 IT PArCx-ArCx Glut        0   2
+  L5-6 IT PArCx-ArCx-CTX Glut    0   7
+  L5-6 PArCx-ArCx Glut           0   7
+
+$HTH
+                                     sig_group
+Subcortex_Group_v4                    high low
+  HTHpo HMX2-ESR1 GABA                   8   1
+  HTHtu-MPA-MeR FEZF1-ESR1 Glut          8   0
+  MM FOXB1 Glut                          8   0
+  ArH TBX3 GABA                          5   1
+  HTHpo HMX2-GAL GABA                    4   6
+  PeV-PHN HMX2-LEF1 GABA                 3   4
+  PeV-PHN HMX2-LEF1 Glut                 3   1
+  HTHtu-HTHpo NTS-SEMA3C GABA            2   6
+  HTHtu-MPA-MeR FEZF1-NR5A1 Glut         2   7
+  MCN FOXB1 Glut                         2   3
+  HTHtu-HTHpo-MeR GABA                   1   4
+  HTHtu-HTHpo-MeR OTP-SIX6 GABA          1  10
+  LH PMCH Glut                           1   2
+  MPA HMX2-CALB1 Glut                    1   2
+  MPA-BST-HTHso GABA                     1   3
+  AHN OTP-FEZF1-ITGA8 Glut               0   2
+  ArH-PeV GHRH GABA                      0   1
+  ArH-PeV-SCN GABA                       0   2
+  DHA-DMH-LHtu-PeVtu LHX9-VGLL2 Glut     0   2
+  HTH OTP-TRH-FEZF1 Glut                 0   4
+  HTH PMFBP1-ONECUT1 GABA                0   7
+  HTHpo GABA                             0   2
+  LH OTP-SIM1-EBF3 Glut                  0   2
+  LH-AHN-PaH-MPA OTP-TRH-CBLN2 Glut      0   6
+  LH-EXA OTP-FEZF1-EBF2 Glut             0   7
+  LH-PHN LMX1A Glut                      0   4
+  LH-PHN-SUM-TM PITX2-LMX1A-ZEB2 Glut    0   7
+  LH-PHN-SUM-TM SIM1 Glut                0   4
+  MPA-BST SATB2-TAC3 GABA                0   2
+  MPA-LH-SCN-AHN-MeR-BST PRDM12 GABA     0   8
+  PaH OTP-FEZF1 Glut                     0   2
+  PaH-SO AVP Glut                        0   3
+  PaH-SO OXT Glut                        0   1
+  PeAV-MnPO UCN3 Glut                    0   2
+  PeV SIX6-SATB2 GABA                    0   3
+  PeV-ArH PPP1R17 Glut                   0   3
+  PeV-PaH-PHN TRH-CRH Glut               0   7
+  PHN GSX1-DLK1 GABA                     0   4
+  PHN-SUM-TM-LH PITX2-LMX1A Glut         0   8
+  PMN LHX6 GABA                          0   2
+  PMN PITX2 Glut                         0   1
+  SCN-ArH-PeV GABA                       0   2
+  TM FOXB1 Glut                          0   2
+  TM HDC Hist-GABA                       0   1
+  TM-LH OTP GABA                         0   4
+
+$MB
+                              sig_group
+Subcortex_Group_v4             high low
+  SC PDE5A Glut                  16   0
+  SCsu PAX7-CXCL14 GABA          13   0
+  SCde GLI3-PAX7-SGCG GABA       11   0
+  SCdp-PAG FOXB1 Glut             9   2
+  SC GLI3-EBF1 GABA               6   4
+  PAG Glut                        4  29
+  SC-PAG PAX7-CDH23 GABA          3  17
+  SCdp PITX2 Glut                 3   4
+  SC-PAG LEF1-EMX2 GABA           2   7
+  PTR-OT FOXB1 Glut               1   4
+  SC DMBX1 GABA                   1  11
+  SCsu PAX7-COL5A2 GABA           1   5
+  DR-EW-3N UCN Glut               0   1
+  MB Glut                         0   5
+  MB-HB Glut                      0   6
+  MB-HB PAX5 GABA                 0  18
+  MB-THM GABA                     0   4
+  MTg FOXD2-NKX6-1 Glut           0   7
+  MTg-HTHtu SLC6A4 TPH2 Sero      0   4
+  PAG-IC-SC TFAP2D-MAF Glut       0  13
+  PTN PAX6 Glut                   0   1
+  SCin Glut                       0   8
+  SCzo GABRR2 GABA                0   6
+  SN GATA3-PAX8 GABA              0   6
+  SN GATA3-PVALB GABA             0   3
+  SN SOX6 Dopa                    0   6
+  SN-VTR CALB1 Dopa               0  13
+  SN-VTR GAD2 Dopa                0   6
+  SN-VTR-HTH GATA3-TCF7L2 GABA    0  23
+  SPAR-MEN Glut                   0   1
+  VTR-HTH Glut                    0  40
+
+$THM
+                              sig_group
+Subcortex_Group_v4             high low
+  VLN Glut                       23   1
+  MD-IMD-VL-MG-PO-PLi Glut       17   0
+  Pul Glut                       10   1
+  THM-MB GABA                    10   0
+  THM GABA                        9   0
+  ILN Glut                        8   7
+  VP-MG Glut                      8   0
+  MG Glut                         7   0
+  LGko Glut                       6   0
+  MiN Glut                        6  15
+  Pf-CM-SPf FZD5 Glut             3   8
+  AV-AM-IAM Glut                  2   1
+  LP-LD Glut                      2   0
+  THM Glut                        2   2
+  LD Glut                         1   1
+  LGko-IPul Glut                  1   1
+  LGmc-LGpc Glut                  1  10
+  AD Glut                         0   2
+  LHN GAP43 Glut                  0   8
+  MGC-BIC GRM8 Glut               0  23
+  MHN TAC3 Glut                   0   4
+  PG NKX2-2-TCF7L2 GABA           0   2
+  PRF-ZI PITX2-SIM1 Glut          0   6
+  RT GABA                         0  13
+  STH PVALB-PITX2 Glut            0   6
+  ZI-HTH PAX6 GABA                0  13
+  ZI-HTH-MeR MEIS2-KCNMB2 GABA    0   6
+  ZI-PrG-RT OTX2 GABA             0   2
+```
+
+
+OLD:
+```
+$AMY
+                            sig_group
+Subcortex_Group_v4           high low
+  AMY-STR NUDAP-ITC MSN        11   4
+  AHA Glut                      8   3
+  PL-ERC-PEA-BL-BM Glut         7   1
+  BM-Co Glut                    3   5
+  AMY-ERC-PPalC Glut            2   3
+  BL Glut                       2   3
+  BL-ERC-PEA Glut               2   2
+  BL-BM-La Glut                 1   0
+  La Glut                       1   1
+  ACEN SST GABA                 0   1
+  AMY-ERC BARHL2-PAPPA2 Glut    0   4
+  AMY-SLEA-BNST GABA            0   2
+  La-BL-BM Glut                 0  10
+  Me-AA Glut                    0   3
+  Me-BST-AAA GABA               0  14
+
+$BF
+                                    sig_group
+Subcortex_Group_v4                   high low
+  LSd PRDM12 ZEB2 GABA                 11   0
+  LSX PRDM12 SLIT2 GABA                 8   0
+  LSX MET ETV1 GABA                     4   0
+  LSX NKX2-1 CHAT GABA                  4   0
+  LSX OTX2 GABA                         4   0
+  LSX SALL3 MET GABA                    3   0
+  NDB-MPA-PeVTu TBR1 Glut               3   1
+  BF SKOR1 Glut                         2  11
+  LSX NKX2-1 OTX2 GABA                  2   0
+  LSX PRDM12 NTS GABA                   2   0
+  BF-HTH GABA                           0   5
+  BF-HTH LHX6-CHST9 GABA                0   7
+  BF-HTH-MB SALL3 PAX6 GABA             0   8
+  MS BSX Glut                           0   1
+  NDB-SI LHX6-LHX8 GABA                 0  10
+  NDB-SI LHX6-LHX8-GBX1 GABA            0   5
+  NDB-SI-MPA-LPA LHX6-LHX8-GBX1 GABA    0   7
+  SEPc Glut                             0   2
+
+$CTX
+                             sig_group
+Subcortex_Group_v4            high low
+  L5-6 IT CTX-PArCx Glut        30   3
+  L2-3 IT CTX Glut              17   2
+  L4-5 IT CTX-PArCx Glut        17   0
+  L2-3 IT CTX-PArCx-ArCx Glut    4   3
+  CTX PVALB GABA                 2   0
+  CTX PVALB Chandelier GABA      0   3
+  CTX-CGE PBX3 GABA              0   1
+  L5 ET CTX-PArCx Glut           0   4
+  L5-6 NP CTX-PArCx Glut         0   3
+  L6 CT CTX-PArCx Glut           0  28
+  L6b CT ERC Glut                0  11
+  L6b CTX-PArCx Glut             0   4
+
+$EXA
+                            sig_group
+Subcortex_Group_v4           high low
+  BST EBF2 Glut                 2   0
+  BST-EA-HTH SAMD3-TP73 Glut    0  12
+  BST-MPA-MeR GABA              0   4
+  BST-MPA-MeR-PeV SATB2 GABA    0   6
+
+$HTH
+                                     sig_group
+Subcortex_Group_v4                    high low
+  HTHpo HMX2-ESR1 GABA                   8   1
+  HTHtu-MPA-MeR FEZF1-ESR1 Glut          8   0
+  MM FOXB1 Glut                          8   0
+  ArH TBX3 GABA                          4   2
+  HTHpo HMX2-GAL GABA                    4   6
+  PeV-PHN HMX2-LEF1 GABA                 3   4
+  PeV-PHN HMX2-LEF1 Glut                 3   1
+  HTHtu-HTHpo NTS-SEMA3C GABA            2   6
+  HTHtu-MPA-MeR FEZF1-NR5A1 Glut         2   7
+  MCN FOXB1 Glut                         2   3
+  HTHtu-HTHpo-MeR GABA                   1   4
+  HTHtu-HTHpo-MeR OTP-SIX6 GABA          1  10
+  LH PMCH Glut                           1   2
+  MPA HMX2-CALB1 Glut                    1   2
+  MPA-BST-HTHso GABA                     1   3
+  AHN OTP-FEZF1-ITGA8 Glut               0   2
+  ArH-PeV GHRH GABA                      0   1
+  ArH-PeV-SCN GABA                       0   2
+  DHA-DMH-LHtu-PeVtu LHX9-VGLL2 Glut     0   2
+  HTH OTP-TRH-FEZF1 Glut                 0   4
+  HTH PMFBP1-ONECUT1 GABA                0   7
+  LH OTP-SIM1-EBF3 Glut                  0   2
+  LH-AHN-PaH-MPA OTP-TRH-CBLN2 Glut      0   6
+  LH-EXA OTP-FEZF1-EBF2 Glut             0   7
+  LH-PHN LMX1A Glut                      0   4
+  LH-PHN-SUM-TM PITX2-LMX1A-ZEB2 Glut    0   7
+  LH-PHN-SUM-TM SIM1 Glut                0   4
+  MPA-BST SATB2-TAC3 GABA                0   2
+  MPA-LH-SCN-AHN-MeR-BST PRDM12 GABA     0   8
+  PaH OTP-FEZF1 Glut                     0   2
+  PaH-SO AVP Glut                        0   3
+  PaH-SO OXT Glut                        0   1
+  PeAV-MnPO UCN3 Glut                    0   2
+  PeV SIX6-SATB2 GABA                    0   3
+  PeV-ArH PPP1R17 Glut                   0   3
+  PeV-PaH-PHN TRH-CRH Glut               0   7
+  PHN GSX1-DLK1 GABA                     0   4
+  PHN-SUM-TM-LH PITX2-LMX1A Glut         0   8
+  PMN LHX6 GABA                          0   2
+  PMN PITX2 Glut                         0   1
+  SCN-ArH-PeV GABA                       0   2
+  TM FOXB1 Glut                          0   2
+  TM HDC Hist-GABA                       0   1
+  TM-LH OTP GABA                         0   4
+
+$MB
+                              sig_group
+Subcortex_Group_v4             high low
+  SC PDE5A Glut                  16   0
+  SCsu PAX7-CXCL14 GABA          13   0
+  SCde GLI3-PAX7-SGCG GABA       11   0
+  SCdp-PAG FOXB1 Glut            10   2
+  SC GLI3-EBF1 GABA               9   1
+  PAG-DpG-PTR Glut                3  20
+  SC-PAG CDH23 GABA               3   8
+  SC-PAG LEF1-EMX2 GABA           2   5
+  SCdp PITX2 Glut                 2   4
+  MB DMBX1 GABA                   1  19
+  MB PAX7-TFAP2B GABA             1   2
+  MB-THM GABA                     1   3
+  PAG Glut                        1   4
+  PTR-OT FOXB1 Glut               1   4
+  SCsu PAX7-COL5A2 GABA           1   5
+  DR-EW-3N UCN Glut               0   1
+  MB Glut                         0   5
+  MB-HB Glut                      0   6
+  MB-HB PAX5 GABA                 0  18
+  MTg FOXD2-NKX6-1 Glut           0   7
+  MTg-HTHtu SLC6A4 TPH2 Sero      0   4
+  PAG-IC-SC TFAP2D-MAF Glut       0  13
+  PAG-SPAR-MEN Glut               0   4
+  PTN PAX6 Glut                   0   1
+  SCin Glut                       0   8
+  SCzo GABRR2 GABA                0   6
+  SN EBF2 GABA                    0   5
+  SN GATA3-PAX8 GABA              0   6
+  SN GATA3-PVALB GABA             0   3
+  SN SEMA5A GABA                  0   2
+  SN SOX6 Dopa                    0   6
+  SN-VTR CALB1 Dopa               0  13
+  SN-VTR GAD2 Dopa                0   6
+  SN-VTR-HTH GATA3-TCF7L2 GABA    0  23
+  VTR-HTH Glut                    0  40
+
+$THM
+                              sig_group
+Subcortex_Group_v4             high low
+  VLN Glut                       23   1
+  MD-IMD-VL-MG-PO-PLi Glut       17   0
+  Pul Glut                       10   1
+  THM-MB GABA                    10   0
+  THM GABA                        9   0
+  ILN Glut                        8   7
+  VP-MG Glut                      8   0
+  MG Glut                         7   0
+  LGko Glut                       6   0
+  MiN Glut                        6  15
+  Pf-CM-SPf FZD5 Glut             3   8
+  AV-AM-IAM Glut                  2   1
+  LP-LD Glut                      2   0
+  THM Glut                        2   2
+  LD Glut                         1   1
+  LGko-IPul Glut                  1   1
+  LGmc-LGpc Glut                  1  10
+  AD Glut                         0   2
+  LHN GAP43 Glut                  0   8
+  MGC-BIC GRM8 Glut               0  23
+  MHN TAC3 Glut                   0   4
+  PG NKX2-2-TCF7L2 GABA           0   2
+  PRF-ZI PITX2-SIM1 Glut          0   6
+  RT GABA                         0  13
+  STH PVALB-PITX2 Glut            0   6
+  ZI-HTH PAX6 GABA                0  13
+  ZI-HTH-MeR MEIS2-KCNMB2 GABA    0   6
+  ZI-PrG-RT OTX2 GABA             0   2
+
+```
+
+### Plots
+
+I think this is the fraction of each group's clusters that are in the 
+high-vs-low groups (but in both numerator & denominator, only counts clusters 
+that have the given regional annotation):
+
+```{r}
+Map(function(x, nm) {
+    data.frame(
+        sig_group  = rep(c("high", "low"), c(length(x$hi_cl), length(x$lo_cl))),
+        cluster    = c(x$hi_cl, x$lo_cl)
+    ) %>% 
+        mutate(
+            Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+        ) %>% 
+        .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+        table %>% 
+        t %>% 
+        .[order(.[,"high"], decreasing = TRUE), ] %>% 
+        prop.table(margin=1) %>% 
+        Heatmap(
+            heatmap_legend_param = list(title = "frac group", direction="horizontal"),
+            cluster_columns = FALSE
+        ) -> ht
+    draw(ht, heatmap_legend_side = "top", column_title = nm)
+}, grouped_clusts_by_candidates, names(grouped_clusts_by_candidates))
+```
+
+(Change plot area):
+
+```{r, fig.width=5, fig.height=8}
+Map(function(x, nm) {
+    data.frame(
+        sig_group  = rep(c("high", "low"), c(length(x$hi_cl), length(x$lo_cl))),
+        cluster    = c(x$hi_cl, x$lo_cl)
+    ) %>% 
+        mutate(
+            Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+        ) %>% 
+        .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+        table %>% 
+        t %>% 
+        .[order(.[,"high"], decreasing = TRUE), ] %>% 
+        prop.table(margin=1) %>% 
+        Heatmap(
+            heatmap_legend_param = list(title = "frac group", direction="horizontal"),
+            cluster_columns = FALSE
+        ) -> ht
+    draw(ht, heatmap_legend_side = "top", column_title = nm)
+}, grouped_clusts_by_candidates, names(grouped_clusts_by_candidates))
+```
+
+
+Instead of the fraction of each group, show the number of clusters:
+
+```{r}
+Map(function(x, nm) {
+    data.frame(
+        sig_group  = rep(c("high", "low"), c(length(x$hi_cl), length(x$lo_cl))),
+        cluster    = c(x$hi_cl, x$lo_cl)
+    ) %>% 
+        mutate(
+            Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+        ) %>% 
+        .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+        table %>% 
+        t %>% 
+        .[order(.[,"high"], decreasing = TRUE), ] %>% 
+        # prop.table(margin=1) %>% 
+        Heatmap(
+            heatmap_legend_param = list(title = "clusters", direction="horizontal"),
+            cluster_columns = FALSE
+        ) -> ht
+    draw(ht, heatmap_legend_side = "top", column_title = nm)
+}, grouped_clusts_by_candidates, names(grouped_clusts_by_candidates))
+```
+
+
+# Find the THM GABA clusters that look like MB
+
+There are THM GABA clusters that have notable accessiblity in MB peaks I find.
+I want to find those THM GABA clusters, as well as the MB candidate peaks.
+
+So THM GABA clusters with MB candidate peak signal.
+
+I'm going to use that kmeans function I think, but with the MB peaks only in the
+THM clusters.
+
+```{r}
+thm_clusts_mb_cands <- divide_clusters_by_candidates(
+    "THM",
+    setNames(top40_peaks_by_comb_rank_region["MB"], "THM")
+)
+```
+
+Indeed, all the high signal clusters are THM & GABA.
+
+```{r}
+table(obs[thm_clusts_mb_cands$hi_cl, c("Dominant_Region", "NT")])
+#                      NT
+# Dominant_Region GABA
+#                   THM   18
+```
+
+
+Let's get the peaks as well.
+
+```{r}
+# divide peaks into 2 groups this time
+pk_km <- kmeans(thm_clusts_mb_cands$zmat, 2)
+
+# > table(pk_km$cluster)
+#  1  2 
+# 11 29 
+# 
+### OLD:
+#  1  2 
+# 13 27 
+
+# table(pk_km$centers[1, ] > pk_km$centers[2, ])
+# FALSE  TRUE 
+#    87   161 
+### OLD:
+# FALSE  TRUE 
+#   101   147 
+
+# --> 1 has 11 peaks in it, higher signal in 65% of clusters;
+#     in heatmap, I see something like 13 high-signal peaks.
+
+### OLD:
+# --> 1 has 13 peaks in it, higher signal in 2/3 of clusters;
+#     in heatmap, I see ~12 high-signal peaks
+# 
+# that looks good enough
+mb_peaks_in_thm_gaba <- names(pk_km$cluster)[pk_km$cluster==1]
+
+# also copy the thm_gaba clusters into another object
+thm_gaba_cl_with_mb_peaks <- thm_clusts_mb_cands$hi_cl
+```
+
+I think it checks out:
+
+```{r, fig.width=15, fig.height=10}
+Heatmap(
+    thm_clusts_mb_cands$zmat,
+    col = colorRamp2(c(-10, 0, 10), c("blue", "white", "red"))
+) 
+```
+
+```{r}
+Heatmap(
+    thm_clusts_mb_cands$zmat[
+        mb_peaks_in_thm_gaba,
+        thm_gaba_cl_with_mb_peaks
+    ],
+    col = colorRamp2(c(-10, 0, 10), c("blue", "white", "red"))
+)
+```
+
+### (!) Export
+
+
+```{r}
+rownames(subset(obs, Subcortex_Group_v4 %in% c("THM Glut", "THM GABA")))
+thm_gaba_cl_with_mb_peaks
+```
+
+
+```{r}
+if (!dir.exists(file.path(outdir, "data")))
+    dir.create(file.path(outdir, "data"))
+
+write(
+    thm_gaba_cl_with_mb_peaks, 
+    file.path(outdir, "data/THM_clusters_with_MB_peaks.txt")
+)
+
+write(
+    mb_peaks_in_thm_gaba,
+    file.path(outdir, "data/MB_peaks_in_THM_clusters.txt")
+)
+```
+
+Also export z-score matrix for all clusters vs. those peaks. 
+[actually not used]
+
+```{r}
+mat_z <- t(scale(t(mat_norm[mb_peaks_in_thm_gaba, ])))
+
+write.csv(
+    mat_z,
+    file.path(outdir, "data/MB_peaks_in_THM_clusters_zscore_mat.csv")
+)
+```
+
+
+Also create/export the "eigen peak" values (instead of the mean z-score, will
+see but this might be better).
+
+```{r}
+mat_norm[mb_peaks_in_thm_gaba, ] %>% .[1:3, 1:3]
+```
+Should log transform the norm counts before PCA...
+
+```{r}
+write.csv(
+    prcomp(t(
+        log1p(mat_norm[mb_peaks_in_thm_gaba, ])
+    ))$x[, 1, drop=FALSE],
+    file.path(outdir, "data/MB_peaks_in_THM_clusters_cl_eigen.csv")
+)
+```
+
+### (!) Look at the clusters with high signal for those peaks
+
+for each cluster, avg z-score for the peak set `mb_peaks_in_thm_gaba`:
+(remember mat_z is just that peak set)
+
+```{r}
+hist(colMeans(mat_z), breaks=200) # all clusters
+hist(colMeans(mat_z[, thm_gaba_cl_with_mb_peaks]), breaks=200) # the thm_gaba_cl w/ the peaks
+```
+
+Together, those two plots show that those THM GABA clusters are all in the top
+echelon for clusters that have signal in those peaks.
+
+
+**IMPORTANT**: See all the "SC" MB groups:
+
+Order all clusters by the avg scaled signal for that peak set [so which
+clusters have the most signal in those peaks?]:
+
+```{r}
+colMeans(mat_z) %>% 
+    order(decreasing = TRUE) %>% 
+    colnames(mat_z)[.] %>% 
+    obs[., c("Subcortex_Group_v4", "Dominant_Region")] %>% 
+    head(50) %>% 
+    print.data.frame
+```
+
+```
+                   Subcortex_Group_v4 Dominant_Region
+cluster_1839            SC PDE5A Glut              MB
+cluster_1842            SC PDE5A Glut              MB
+cluster_1835            SC PDE5A Glut              MB
+cluster_1831            SC PDE5A Glut              MB
+cluster_30                MB-THM GABA              MB
+cluster_1841            SC PDE5A Glut              MB
+cluster_25                   THM GABA             THM
+cluster_1828            SC PDE5A Glut              MB
+cluster_1840            SC PDE5A Glut              MB
+cluster_22                   THM GABA             THM
+cluster_1833            SC PDE5A Glut              MB
+cluster_1834            SC PDE5A Glut              MB
+cluster_20                   THM GABA             THM
+cluster_26                THM-MB GABA             THM
+cluster_35                THM-MB GABA             THM
+cluster_29                THM-MB GABA             THM
+cluster_1816            SC DMBX1 GABA              MB
+cluster_1836            SC PDE5A Glut              MB
+cluster_33                MB-THM GABA              MB
+cluster_23                THM-MB GABA             THM
+cluster_27                THM-MB GABA             THM
+cluster_21                   THM GABA             THM
+cluster_1847 SCde GLI3-PAX7-SGCG GABA              MB
+cluster_1843 SCde GLI3-PAX7-SGCG GABA              MB
+cluster_28                   THM GABA             THM
+cluster_24                   THM GABA             THM
+cluster_32                THM-MB GABA             THM
+cluster_400       SCdp-PAG FOXB1 Glut              MB
+cluster_386           SCdp PITX2 Glut              MB
+cluster_708         SC GLI3-EBF1 GABA              MB
+cluster_17                   THM GABA             THM
+cluster_390       SCdp-PAG FOXB1 Glut              MB
+cluster_36                THM-MB GABA             THM
+cluster_713     SCsu PAX7-CXCL14 GABA              MB
+cluster_707         SC GLI3-EBF1 GABA              MB
+cluster_716         SC GLI3-EBF1 GABA              MB
+cluster_31                MB-THM GABA              MB
+cluster_720         SC GLI3-EBF1 GABA              MB
+cluster_389       SCdp-PAG FOXB1 Glut              MB
+cluster_34                THM-MB GABA             THM
+cluster_391       SCdp-PAG FOXB1 Glut              MB
+cluster_1829            SC PDE5A Glut              MB
+cluster_710         SC GLI3-EBF1 GABA              MB
+cluster_722         SC GLI3-EBF1 GABA              MB
+cluster_715         SC GLI3-EBF1 GABA              MB
+cluster_1751    SCsu PAX7-CXCL14 GABA              MB
+cluster_1821            SC DMBX1 GABA              MB
+cluster_19                   THM GABA             THM
+cluster_723         SC GLI3-EBF1 GABA              MB
+cluster_1785         SCzo GABRR2 GABA              MB
+```
+
+
+```{r}
+# > print.data.frame(obs[thm_gaba_cl_with_mb_peaks, c("Subcortex_Group_v4", "Dominant_Region")])
+#            Subcortex_Group_v4 Dominant_Region
+# cluster_17           THM GABA             THM
+# cluster_18           THM GABA             THM
+# cluster_19           THM GABA             THM
+# cluster_20           THM GABA             THM
+# cluster_21           THM GABA             THM
+# cluster_22           THM GABA             THM
+# cluster_23        THM-MB GABA             THM
+# cluster_24           THM GABA             THM
+# cluster_25           THM GABA             THM
+# cluster_26        THM-MB GABA             THM
+# cluster_27        THM-MB GABA             THM
+# cluster_28           THM GABA             THM
+# cluster_29        THM-MB GABA             THM
+# cluster_32        THM-MB GABA             THM
+# cluster_34        THM-MB GABA             THM
+# cluster_35        THM-MB GABA             THM
+# cluster_36        THM-MB GABA             THM
+# cluster_37        THM-MB GABA             THM
+```
+
+```{r}
+rownames(subset(obs, Subcortex_Group_v4 %in% c("THM GABA", "THM-MB GABA"))) %>% 
+    setdiff(thm_gaba_cl_with_mb_peaks)
+# [1] "cluster_38"
+
+rownames(subset(obs, Subcortex_Group_v4 %in% c("THM GABA", "THM-MB GABA"))) %>% 
+    setdiff(thm_gaba_cl_with_mb_peaks, .)
+# character(0)
+```
+
+all THM GABA and THM-MB GABA except for "cluster_38".
+
+```{r}
+# > obs[thm_gaba_cl_with_mb_peaks, "Subcortex_Group_v4"] %>% table
+# THM GABA THM-MB GABA 
+#        9           9 
+
+# > sum(obs$Subcortex_Group_v4 == "THM GABA")
+# [1] 9
+# > sum(obs$Subcortex_Group_v4 == "THM-MB GABA")
+# [1] 10
+```
+
+9/9 THM GABA clusters, and 9/10 THM-MB GABA clusters.
+
+```{r}
+# obs[thm_gaba_cl_with_mb_peaks, c(
+#     "Subcortex_Group_v4", "Subcortex_Subclass_hcpc_v4"
+# )] %>% print.data.frame
+# 
+# cluster_17           THM GABA                         33
+# cluster_18           THM GABA                         33
+# cluster_19           THM GABA                         33
+# cluster_20           THM GABA                         33
+# cluster_21           THM GABA                         33
+# cluster_22           THM GABA                         33
+# cluster_23        THM-MB GABA                         33
+# cluster_24           THM GABA                         33
+# cluster_25           THM GABA                         33
+# cluster_26        THM-MB GABA                         33
+# cluster_27        THM-MB GABA                         33
+# cluster_28           THM GABA                         33
+# cluster_29        THM-MB GABA                         33
+# cluster_32        THM-MB GABA                         33
+# cluster_34        THM-MB GABA                         33
+# cluster_35        THM-MB GABA                         33
+# cluster_36        THM-MB GABA                         33
+# cluster_37        THM-MB GABA                         33
+```
+
+What about the low clusters?
+
+```{r}
+# 230 clusters, so a lot more; only 37 GABA
+obs[thm_clusts_mb_cands$lo_cl, c(
+    "Subcortex_Group_v4", "NT", "Subcortex_Subclass_hcpc_v4", "Dominant_Region"
+)] %>% 
+    subset(NT=="GABA") %>% 
+    print.data.frame
+```
+
+```
+                       Subcortex_Group_v4   NT Subcortex_Subclass_hcpc_v4 Dominant_Region
+cluster_1557        PG NKX2-2-TCF7L2 GABA GABA                          4             THM
+cluster_1559        PG NKX2-2-TCF7L2 GABA GABA                         21             THM
+cluster_38                    THM-MB GABA GABA                         33             THM
+cluster_41                        RT GABA GABA                         29             THM
+cluster_42                        RT GABA GABA                         29             THM
+cluster_43                        RT GABA GABA                         29             THM
+cluster_44                        RT GABA GABA                         29             THM
+cluster_45                        RT GABA GABA                         29             THM
+cluster_46                        RT GABA GABA                         29             THM
+cluster_47                        RT GABA GABA                         29             THM
+cluster_48                        RT GABA GABA                         29             THM
+cluster_49                        RT GABA GABA                         29             THM
+cluster_50                        RT GABA GABA                         29             THM
+cluster_51                        RT GABA GABA                         29             THM
+cluster_518              ZI-HTH PAX6 GABA GABA                         18             THM
+cluster_519              ZI-HTH PAX6 GABA GABA                         13             THM
+cluster_52                        RT GABA GABA                         29             THM
+cluster_526  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                         29             THM
+cluster_527  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                          4             THM
+cluster_528  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                          4             THM
+cluster_529  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                          4             THM
+cluster_53                        RT GABA GABA                         29             THM
+cluster_530  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                          4             THM
+cluster_531  ZI-HTH-MeR MEIS2-KCNMB2 GABA GABA                          4             THM
+cluster_693              ZI-HTH PAX6 GABA GABA                         18             THM
+cluster_694              ZI-HTH PAX6 GABA GABA                         19             THM
+cluster_695              ZI-HTH PAX6 GABA GABA                          4             THM
+cluster_696              ZI-HTH PAX6 GABA GABA                          4             THM
+cluster_697              ZI-HTH PAX6 GABA GABA                          4             THM
+cluster_698              ZI-HTH PAX6 GABA GABA                          4             THM
+cluster_699              ZI-HTH PAX6 GABA GABA                          4             THM
+cluster_700           ZI-PrG-RT OTX2 GABA GABA                          4             THM
+cluster_701           ZI-PrG-RT OTX2 GABA GABA                         19             THM
+cluster_702              ZI-HTH PAX6 GABA GABA                         19             THM
+cluster_703              ZI-HTH PAX6 GABA GABA                         13             THM
+cluster_704              ZI-HTH PAX6 GABA GABA                         19             THM
+cluster_705              ZI-HTH PAX6 GABA GABA                         19             THM
+```
+
+#### Plot the group segregation
+
+Basically plot that (shows the 9/9 THM GABA and 9/10 THM-MB GABA in the high group).
+
+```{r}
+data.frame(
+    sig_group  = rep(
+        c("high", "low"), 
+        c(length(thm_clusts_mb_cands$hi_cl), length(thm_clusts_mb_cands$lo_cl))
+    ),
+    cluster = c(thm_clusts_mb_cands$hi_cl, thm_clusts_mb_cands$lo_cl)
+) %>% 
+    mutate(
+        Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+    ) %>% 
+    .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+    table %>% 
+    t %>% 
+    .[order(.[,"high"], decreasing = TRUE), ] %>% 
+    prop.table(margin=1) %>% 
+    Heatmap(
+        heatmap_legend_param = list(title = "frac group", direction="horizontal"),
+        cluster_columns = FALSE
+    ) -> ht
+
+draw(ht, heatmap_legend_side = "top", column_title = "THM GABA w/ MB peaks")
+```
+
+[show total number of clusters]:
+
+```{r}
+data.frame(
+    sig_group  = rep(
+        c("high", "low"), 
+        c(length(thm_clusts_mb_cands$hi_cl), length(thm_clusts_mb_cands$lo_cl))
+    ),
+    cluster = c(thm_clusts_mb_cands$hi_cl, thm_clusts_mb_cands$lo_cl)
+) %>% 
+    mutate(
+        Subcortex_Group_v4 = obs[cluster, "Subcortex_Group_v4"]
+    ) %>% 
+    .[, c("sig_group", "Subcortex_Group_v4")] %>% 
+    table %>% 
+    t %>% 
+    .[order(.[,"high"], decreasing = TRUE), ] %>% 
+    # prop.table(margin=2) %>% 
+    Heatmap(
+        heatmap_legend_param = list(title = "clusters", direction="horizontal"),
+        cluster_columns = FALSE
+    ) -> ht
+
+draw(ht, heatmap_legend_side = "top", column_title = "THM GABA w/ MB peaks")
+```
+
+### (Which MB groups have those peaks??)
+
+**Note:** I already showed the clusters/groups that had the highest avg z-scores
+in those peaks (above). It's easy to see the MB ones (a lot of 'SC' groups).
+
+```{r, fig.width=20, fig.height=20}
+mat_z %>% 
+    .[, colnames(.) %in% rownames(subset(obs, Dominant_Region == "MB"))] %>% 
+    (function(x) {
+        col_group <- factor(obs[colnames(x), "Subcortex_Group_v4"]) # 35 groups in MB...
+        Heatmap(t(x), row_split = col_group)
+    })
+```
+
+
+```{r}
+obs[, c("Dominant_Region", "NT", "Subcortex_Group_v4")] %>% 
+    subset(Dominant_Region == "MB") %>% 
+    .$Subcortex_Group_v4 %>% 
+    unique %>% sort
+```
+
+I could do the kmeans split thing again and show the group segregation 
+specifically for that peak set, although you can well see above which 
+MB clusters/groups have the signal.
+
+# Find a score for across-NT regionality 
+
+want a “regional, NT-shared specificity” score per peak that:
+- rewards being highly specific to the region overall,
+- balanced across Glut & GABA within that region (i.e., present in both),
+- penalizes off-region signal, and
+- (ideally) favors broad coverage across many clusters in that region (not just a few).
+
+## (!) Precompute region/nt index sets
+
+```{r}
+# index of columns for each Region_NT
+idx_by_rgnt <- lapply(useable_regions, function(rg) {
+    list(
+        Glut = which(obs$Dominant_Region == rg & obs$NT == "Glut"),
+        GABA = which(obs$Dominant_Region == rg & obs$NT == "GABA")
+    )
+})
+names(idx_by_rgnt) <- useable_regions
+
+# index of columns for each Region (all NTs pooled)
+idx_by_region <- lapply(useable_regions, function(rg) {
+    which(obs$Dominant_Region == rg & obs$NT %in% c("Glut","GABA"))
+})
+names(idx_by_region) <- useable_regions
+
+# all columns from usable regions (to define "off-region")
+cols_in_scope <- sort(unique(unlist(idx_by_region)))
+```
+
+## [skip] Specificity components for each peak
+
+Actually I don't like this, I don't want to do cluster averages.
+
+```{r}
+eps <- 1e-9
+
+# mean CPM per peak in each (region, NT)
+A_rgnt <- lapply(idx_by_rgnt, function(ix) {
+    list(
+        Glut = if (length(ix$Glut)) rowMeans(mat_norm[, ix$Glut, drop=FALSE]) else rep(0, nrow(mat_norm)),
+        GABA = if (length(ix$GABA)) rowMeans(mat_norm[, ix$GABA, drop=FALSE]) else rep(0, nrow(mat_norm))
+    )
+})
+
+# mean CPM per peak pooled across NTs within region
+A_rg <- lapply(idx_by_region, function(ix) {
+    if (length(ix)) rowMeans(mat_norm[, ix, drop=FALSE]) else rep(0, nrow(mat_norm))
+})
+
+# mean CPM per peak outside each region (within usable scope)
+A_off <- lapply(useable_regions, function(rg) {
+    off_ix <- setdiff(cols_in_scope, idx_by_region[[rg]])
+    if (length(off_ix)) rowMeans(mat_norm[, off_ix, drop=FALSE]) else rep(0, nrow(mat_norm))
+})
+names(A_off) <- useable_regions
+
+# components per region
+score_list <- lapply(useable_regions, function(rg) {
+    A_g <- A_rgnt[[rg]]$Glut
+    A_b <- A_rgnt[[rg]]$GABA
+    A_r <- A_rg[[rg]]
+    A_o <- A_off[[rg]]
+    
+    # regionality
+    R <- A_r / (A_r + A_o + eps)
+    
+    # shared NT strength (geometric mean)
+    G <- sqrt(A_g * A_b)
+    
+    # NT balance (symmetric)
+    B <- 1 - abs(A_g - A_b) / (A_g + A_b + eps)
+    
+    # optional evenness across clusters in region
+    # (compute only if you want it; otherwise set E <- 1)
+    E <- 1
+    # Example Gini (optional; can be computationally heavier):
+    # library(ineq)
+    # region_mat <- mat_norm[, idx_by_region[[rg]], drop=FALSE]
+    # E <- apply(region_mat, 1, function(v) 1 - ineq::Gini(v))
+    
+    # scale G within region to [0,1] by ranks (robust)
+    rk <- rank(G, ties.method = "average")
+    Gs <- (rk - 1) / (length(G) - 1)  # 0..1
+    
+    S <- R * Gs * B * (E^0.5)  # gamma=0.5; or drop E factor
+    
+    tibble::tibble(
+        Peak = rownames(mat_norm),
+        Region = rg,
+        A_glut = A_g,
+        A_gaba = A_b,
+        A_region = A_r,
+        A_off = A_o,
+        Regionality = R,
+        NT_balance = B,
+        SharedStrength_rank = Gs,
+        Score = S
+    )
+})
+scores_df <- dplyr::bind_rows(score_list)
+
+```
+
+### Enforce “regional” by margin vs other regions
+
+Some peaks will look decent in multiple regions. Keep a margin:
+
+```{r}
+scores_df <- scores_df %>%
+    group_by(Peak) %>%
+    mutate(
+        Score_rank = rank(Score, ties.method="average"),
+        Score_best = max(Score, na.rm=TRUE),
+        Score_second = sort(Score, decreasing=TRUE)[pmin(2, n())],
+        Margin = Score_best - ifelse(is.finite(Score_second), Score_second, 0)
+    ) %>%
+    ungroup()
+
+# "Regional peaks" = those for which region is the argmax AND margin >= tau
+tau <- 0.05  # tune after inspecting distribution
+regional_calls <- scores_df %>%
+    group_by(Peak) %>%
+    slice_max(order_by = Score, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    filter(Margin >= tau)
+
+```
+
+### Summaries
+
+Which regions have strong “regional & NT-shared” peaks?
+
+```{r}
+summary_by_region <- regional_calls %>%
+    group_by(Region) %>%
+    summarize(
+        n_regional_peaks = n(),
+        median_score = median(Score, na.rm=TRUE),
+        median_regionality = median(Regionality, na.rm=TRUE),
+        median_balance = median(NT_balance, na.rm=TRUE),
+        .groups="drop"
+    ) %>%
+    arrange(desc(n_regional_peaks))
+```
+
+```{r}
+summary_by_region
+```
+
+
+```{r, fig.width=2, fig.height=2}
+library(ggrepel)
+
+ggplot(
+    summary_by_region,
+    aes(median_regionality, median_balance, label = Region)
+) + 
+    geom_point() + 
+    geom_text_repel(
+        # aes(label = label),
+        # direction = "y",           # stack labels vertically, move horizontally if needed
+        # direction = "x",           # stack labels vertically, move horizontally if needed
+        # nudge_y = 15,               # push labels to the right
+        size = 2.5,
+        box.padding = 0.35,
+        point.padding = 0.25,
+        min.segment.length = 0,      # always draw a segment
+        segment.size = 0.25,
+        segment.color = "black",
+        max.overlaps = Inf,
+        show.legend = FALSE
+    ) +
+    coord_cartesian(xlim = c(0.6, 0.7), ylim = c(0.8, 1)) +
+    theme_md_classic()
+```
+
+
+Also get top 40 based on this score:
+
+```{r}
+top_40peaks_by_region_score <- scores_df %>%
+    group_by(Region) %>%
+    slice_max(order_by = Score, n = 40, with_ties = FALSE) %>%
+    ungroup()
+```
+
+How “shared” across NTs are the selected peaks?
+
+```{r}
+# Distribution of NT_balance among chosen region peaks:
+balance_summary <- regional_calls %>%
+    group_by(Region) %>%
+    summarize(
+        frac_high_balance = mean(NT_balance >= 0.7),  # both NTs present & similar
+        frac_low_balance  = mean(NT_balance <= 0.3),  # mostly single-NT
+        .groups="drop"
+    )
+```
+
+This tells you which regions truly have NT-shared regional peaks vs regions 
+where “regionality” is dominated by one NT.
+
+```{r}
+balance_summary
+```
+
+
+```{r}
+scores_df %>% filter(Region == "MB") %>% 
+    ggplot(
+        aes(x = SharedStrength_rank, y = Regionality, color = NT_balance)
+    ) +
+    geom_point(alpha = 0.3, size = 0.6) +
+    scale_color_viridis_c() +
+    theme_md_classic() +
+    labs(
+        title = "MB peaks: shared NT strength vs regionality",
+        x = "Shared strength (rank within region)",
+        y = "Regionality (A_region / (A_region + A_off))"
+    )
+```
+
+# Redo regionality vs. sharing scores
+
+## IDEAS
+
+idea 1:
+- top 200 peaks by specificity for region (mean? or just take the 200th score?)
+- vs. sharing score across GABA & Glut
+
+plot tau index of peak by region vs. tau index of peak by NT
+
+--
+
+what i was trying to do is get:
+- extent to which peaks are specific to each region (not necessarily uniform, just unique)
+- extent to which region-specific peaks are shared across GABA & Glut (are reg peaks common to diff lineages?)
+- define sets of regional
+
+## rank vs specificity in each region
+
+rank-vs-specificity line plots showing each region (so can see which region has
+the most specific peaks overall)
+--> derive metric from that? (like an inflection point?)
+
+```{r}
+list(
+    spec = frac_in_region_nt,
+    rank_spec = ranks_frac_by_region_nt
+) 
+```
+
+```{r}
+# actually, relevant i think...
+rgnt_pk_spec <- bind_rows(lapply(names(frac_in_region_nt), function(nm) {
+    data.frame(
+        peak = names(frac_in_region_nt[[nm]]),
+        region_nt = nm,
+        spec = frac_in_region_nt[[nm]],
+        rank_spec = ranks_frac_by_region_nt[[nm]],
+        row.names = NULL
+    )
+}))
+rgnt_pk_spec <- mutate(
+    rgnt_pk_spec, 
+    rev_rank_spec = max(rank_spec) + 1 - rank_spec,
+    region = sub("_.*", "", region_nt),
+    nt     = sub(".*_", "", region_nt)
+)
+```
+
+```{r}
+rg_pk_spec <- bind_rows(lapply(names(frac_in_region), function(nm) {
+    data.frame(
+        peak = names(frac_in_region[[nm]]),
+        region = nm,
+        spec = frac_in_region[[nm]],
+        rank_spec = ranks_frac_by_region[[nm]],
+        row.names = NULL
+    )
+}))
+rg_pk_spec <- mutate(rg_pk_spec, rev_rank_spec = max(rank_spec) + 1 - rank_spec)
+```
+
+```{r}
+rg_pk_spec %>% 
+    subset(rev_rank_spec < 200) %>% 
+    ggplot(aes(rev_rank_spec, spec, color = region)) + 
+    geom_line() + 
+    theme_md_classic()
+```
+
+wow so it's really like all or nothing.
+
+```{r}
+rg_pk_spec %>% 
+    subset(rev_rank_spec < 1e3) %>% 
+    ggplot(aes(rev_rank_spec, spec, color = region)) + 
+    geom_line() + 
+    theme_md_classic() + 
+    scale_color_viridis_d()
+```
+
+
+### conclusion: regionality metric
+
+i'll just take the 100th (or 1000th, w/e) most specific peak... there's your metric. median
+of top 200.
+
+```{r}
+subset(rg_pk_spec, rev_rank_spec == 100) %>% 
+    arrange(desc(spec)) 
+
+subset(rg_pk_spec, rev_rank_spec == 1000) %>% 
+    arrange(desc(spec)) 
+```
+
+```{r}
+## very linear relationship, so it doesn't really matter
+# subset(rg_pk_spec, rev_rank_spec == 100) %>% 
+#     arrange(desc(spec)) %>% 
+#     select(region, spec) %>% 
+#     left_join(
+#         subset(rg_pk_spec, rev_rank_spec == 1000) %>% 
+#             arrange(desc(spec)) %>% 
+#             select(region, spec),
+#         by = "region",
+#         suffix = c("_100", "_1000")
+#     ) %>% 
+#     ggplot(aes(spec_100, spec_1000)) + 
+#     geom_point() + 
+#     theme_md_classic()
+```
+
+### [!] Final metric
+
+```{r}
+regionality_metric <- subset(rg_pk_spec, rev_rank_spec == 1000) %>% 
+    arrange(desc(spec)) %>% 
+    select(region, spec) %>% 
+    rename(regionality = spec)
+
+###
+### --> regionality: the tendency of a region to have unique peaks (not found
+###                  in other regions)
+###
+
+# > print.data.frame(regionality_metric)
+#   region regionality
+# 1    THM  0.63149995
+# 2     MB  0.37900804
+# 3    CTX  0.37156109
+# 4     BF  0.27971160
+# 5    AMY  0.26447598
+# 6    HiF  0.25884888
+# 7    HTH  0.24124557
+# 8    EXA  0.05280889
+```
+
+
+## Assess GABA/Glut sharing in top 1000
+
+```{r}
+subset(rg_pk_spec, rev_rank_spec <= 1e3) %>% 
+    (function(x) split(x$peak, x$region)) ->
+    rg_pk_by_rg
+
+stopifnot(all(names(rg_pk_by_rg) == useable_regions))
+```
+
+### [skip] using rg_nt specificities
+
+```{r}
+top1k_rg_pk_spec_by_nt <- lapply(useable_regions, function(rg) {
+    pks <- rg_pk_by_rg[[rg]]
+    rgnt_spec <- subset(
+        rgnt_pk_spec, 
+        (region == rg) & (peak %in% pks) & (nt %in% c("Glut", "GABA"))
+    )
+    left_join(
+        subset(rgnt_spec, nt == "Glut", select = c("peak", "spec")),
+        subset(rgnt_spec, nt == "GABA", select = c("peak", "spec")),
+        by = "peak", suffix = c("_Glut", "_GABA")
+    )
+})
+names(top1k_rg_pk_spec_by_nt) <- useable_regions
+```
+
+```{r}
+top1k_rg_pk_spec_by_nt$AMY
+```
+
+the regional specificity was fine, but for *sharing*, this is super affected
+by balance (number of clusters).
+
+because we're no longer interested in specificity per se...
+
+### using clusters
+
+so the issue with using just the NT specificty within a region is that a region
+might have a million GABA and 2 Glut clusters or something.
+
+so instead, maybe do the kmeans clustering on the peak signals and see how often
+GABA and Glut clusters end up with high signal??
+
+#### scrap
+
+```{r}
+mat_norm[1:3,1:3]
+```
+
+```{r}
+rg_pk_by_rg$AMY %>% head
+```
+
+```{r}
+idx_by_rgnt$AMY %>% lapply(head)
+idx_by_rgnt$AMY %>% unlist %>% sort %>% head
+```
+
+```{r}
+tmp_mat <- mat_norm[rg_pk_by_rg$AMY, sort(unlist(idx_by_rgnt$AMY))]
+```
+
+#### kmeans segregation
+
+```{r}
+kmeans_cl_top1k_rg <- lapply(
+    names(rg_pk_by_rg), 
+    divide_clusters_by_candidates, 
+    rg_pk_by_rg
+)
+names(kmeans_cl_top1k_rg) <- names(rg_pk_by_rg)
+```
+
+```{r}
+obs
+```
+
+
+```{r}
+nt_by_cl <- setNames(
+    obs$NT,
+    rownames(obs)
+)
+```
+
+Metric idea: Fraction of that region's GABA clusters in hi similar to fraction
+of region's Glut cluster. {hmmmm}. 
+
+```{r}
+nt_by_cl[kmeans_cl_top1k_rg$AMY$hi_cl]
+nt_by_cl[kmeans_cl_top1k_rg$AMY$lo_cl]
+```
+
+Table that
+
+## Region+NT Specificity Metric
+
+Same as the regionality metric, but for region+NT:
+
+```{r}
+regionality_nt_metric <- subset(rgnt_pk_spec, rev_rank_spec == 1000) %>%
+    arrange(desc(spec)) %>% 
+    select(region_nt, spec) %>% 
+    rename(uniqueness = spec)
+
+# > print.data.frame(regionality_nt_metric)
+#    region_nt uniqueness
+# 1   THM_Glut 0.61388212
+# 2   CTX_Glut 0.35683457
+# 3    BF_GABA 0.26901397
+# 4    MB_GABA 0.25863608
+# 5   HiF_Glut 0.24834179
+# 6    MB_Glut 0.22400163
+# 7   AMY_Glut 0.21691128
+# 8   THM_GABA 0.17643566
+# 9   HTH_GABA 0.15842874
+# 10  HTH_Glut 0.15732842
+# 11  AMY_GABA 0.12862147
+# 12  CTX_GABA 0.11143462
+# 13  HiF_GABA 0.07025897
+# 14   BF_Glut 0.06548243
+# 15  EXA_Glut 0.04294324
+# 16  EXA_GABA 0.03266933
+```
+
+### Now look for existance of shared specificity
+
+Similar to what I did to select peaks before, but try to quantify this a bit
+more.
+
+This will actually be similar to co-enrichment, to the point that I could 
+probably just use that analysis?
+
+
+

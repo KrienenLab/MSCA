@@ -1,0 +1,368 @@
+---
+title: "3_Compare_Spatial_Multiome_CellCounts"
+output: html_document
+date: "2026-03-16"
+---
+
+Mostly just because I have the data and can't edit the python plots in 
+Illustrator, will regenerate the cell abundance plots in spatial vs. multiome.
+
+# Env
+
+```{r}
+suppressPackageStartupMessages({
+    library(dplyr)
+    library(ggplot2)
+    library(patchwork)
+    library(ggrepel)
+    library(ggpubr)
+})
+
+theme_md_classic <- function() {
+    theme_classic(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),  # was size 8 in other notebooks?
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        complete = TRUE
+    )
+}
+
+theme_md_bw <- function() {
+    theme_bw(
+        base_size = 6, 
+        base_family = "ArialMT",
+        base_line_size = 0.25,
+        base_rect_size = 0.25
+    ) %+replace% theme(
+        axis.text = element_text(color = "black", size = 6),
+        axis.ticks = element_line(color = "black"),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6),
+        strip.text.y = element_text(angle = 0),
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 8),
+        legend.text = element_text(size = 6),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(fill = NA, color = "black"),
+        complete = TRUE
+    )
+}
+```
+
+# Paths
+
+```{r}
+pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+outdir <- file.path(pdir, "spatial_metacell_analysis")
+
+pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"
+
+pdir_plots <- file.path(outdir, "plots")
+if (!dir.exists(pdir_plots))
+    dir.create(pdir_plots)
+```
+
+```{r}
+# obs, color palettes
+# -> note the "obs" is the metacell obs, but in this notebook we are dealing with single cell mapping,
+#    so we will need the full cell metadata as well, which here is cell metadata and not "obs"
+# path_obs <- file.path(pdir_meta, "preprint_freeze/subcortex_anno_table_preprint.csv")
+# path_palettes <- file.path(pdir_meta, "preprint_freeze/color_palette.csv")
+path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
+path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
+
+path_donor_counts <- file.path(pdir_meta, "MSA_cluster_donor_table.csv")
+
+# cell metadata
+# path_cmeta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/revision/rna_cell_metadata_with_preprint_umap_20260219.csv"
+
+
+path_spatial_stats <- file.path(outdir, "data/spatial_Cluster_v4_stats.csv")
+```
+
+# Imports
+
+```{r}
+# obs will align with the full multiome pseudobulk matrix but will later
+# subset to align spatial & multiome clusters, but won't align obs to that
+
+obs <- read.csv(path_obs, row.names = "marm_cluster_id")
+obs$inconclusive_mapping <- as.logical(toupper(obs$inconclusive_mapping))
+# > nrow(obs)
+# [1] 1737
+
+#### lacks Junk; and these are clusters excluded for the analysis set:
+# > table(obs$inconclusive_mapping)
+# False  True 
+#  1642    95 
+
+### old (full preprint set, including Junk clusters)
+# > nrow(obs)
+# [1] 1811
+```
+
+```{r}
+donor_counts <- read.csv(path_donor_counts)[, -1]
+
+spatial_stats <- read.csv(path_spatial_stats)
+```
+
+
+```{r}
+# color palettes
+pal_df <- read.csv(path_palettes)
+pal_df$Name[pal_df$Name == "NA"] <- NA_character_
+
+palettes <- split(pal_df, pal_df$Type) %>% 
+    lapply(function(x) setNames(x$color_hex, x$Name))
+#         BG   CNU-HTH GABA   CNU-HTH Glut       HTH GABA       HTH Glut       HTH Hist     MB-HB GABA 
+#  "#CBC3E3"      "#E69F00"      "#56B4E9"      "#F0E442"      "#0072B2"      "#D55E00"      "#CC79A7" 
+# MB-HB Glut MB-HTH-HB Sero      Nonneuron   Pineal Gland       SEP GABA       TEL Glut       THM GABA 
+#  "#44AA99"      "#AA4499"      "#999999"      "#B3C65C"      "#882255"      "#88CCEE"      "#DDCC77" 
+#   THM Glut           <NA> 
+#  "#332288"      "#7f7f7f"
+```
+
+
+# Use largest multiome donor
+
+## Quick check
+
+Brian used CJ23.56.003 = cjNutmeg
+
+Let's double check
+
+```{r}
+# aggregate(n_cell ~ mit_name, donor_counts, FUN=sum) %>% 
+#     arrange(n_cell) %>% 
+#     print.data.frame
+
+#      mit_name n_cell
+# 1 cjCroissant  32525
+# 2     cjRambo  97091
+# 3 cjJellybean 221811
+# 4    cjNutmeg 330144
+```
+
+## Make cell count tables
+
+```{r}
+donor_counts %>% 
+    filter(mit_name == "cjNutmeg") %>% 
+    select(Cluster_v4, n_cell) %>% 
+    setNames(c("cluster", "multiome")) %>% 
+    left_join(
+        setNames(
+            select(spatial_stats, Cluster_v4_name, qc_pass_assigned_cells),
+            c("cluster", "spatial")
+        ),
+        by = "cluster"
+    ) %>% 
+    left_join(
+        tibble::rownames_to_column(
+            select(obs, Subcortex_Class_v4, Subcortex_Group_v4), 
+            "cluster"
+        ),
+        by = "cluster"
+    ) ->
+    df_cl_counts
+```
+
+```{r}
+print.data.frame(head(df_cl_counts))
+```
+```{r}
+df_grp_counts <- left_join(
+    aggregate(multiome ~ Subcortex_Group_v4, df_cl_counts, FUN=sum),
+    aggregate(spatial  ~ Subcortex_Group_v4, df_cl_counts, FUN=sum),
+    by = "Subcortex_Group_v4"
+) %>% 
+    left_join(
+        unique(select(obs, Subcortex_Class_v4, Subcortex_Group_v4)),
+        by = "Subcortex_Group_v4"
+    )
+```
+
+
+```{r}
+df_cls_counts <- left_join(
+    aggregate(multiome ~ Subcortex_Class_v4, df_cl_counts, FUN=sum),
+    aggregate(spatial  ~ Subcortex_Class_v4, df_cl_counts, FUN=sum),
+    by = "Subcortex_Class_v4"
+)
+```
+
+
+## Plot abundance comparisons, neurons & non-neurons
+
+```{r}
+df_grp_counts %>% 
+    filter(
+        Subcortex_Class_v4 != "Nonneuron",
+        Subcortex_Class_v4 != "Pineal Gland"
+    ) %>% 
+    ggplot(
+        aes(log10(multiome), log10(spatial))
+    ) + 
+    geom_point(
+        aes(color = Subcortex_Class_v4)
+    ) + 
+    scale_x_continuous(labels = scales::math_format(10^.x)) + 
+    scale_y_continuous(labels = scales::math_format(10^.x)) + 
+    # geom_smooth(method="lm", color="black") + 
+    scale_color_manual(values = palettes$Class) + 
+    ggpubr::stat_cor() +
+    labs(
+        x = "Multiome Cells per Group",
+        y = "Spatial Cells per Group",
+        title = "Neurons"
+    ) + 
+    theme_md_classic() -> p1
+p1
+```
+
+```{r}
+df_grp_counts %>% 
+    filter(
+        Subcortex_Class_v4 %in% c("Nonneuron", "Pineal Gland")
+    ) %>% 
+    ggplot(
+        aes(log10(multiome), log10(spatial))
+    ) + 
+    geom_point(
+        aes(color = Subcortex_Group_v4)
+    ) + 
+    ggrepel::geom_text_repel(
+        aes(label = Subcortex_Group_v4, color = Subcortex_Group_v4),
+        size=2, family="ArialMT"
+    ) + 
+    # geom_smooth(method="lm", color="black", se=FALSE) +
+    scale_x_continuous(labels = scales::math_format(10^.x)) + 
+    scale_y_continuous(labels = scales::math_format(10^.x)) + 
+    scale_color_manual(values = palettes$Group) + 
+    ggpubr::stat_cor() +
+    labs(
+        x = "Multiome Cells per Group",
+        y = "Spatial Cells per Group",
+        title = "Nonneurons"
+    ) + 
+    theme_md_classic() + 
+    theme(legend.position="none") -> p2
+p2
+```
+
+```{r}
+p1 + p2
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "cell_abundance_comparisons.pdf"),
+    width=120, height=50, units="mm"
+)
+```
+
+## Class level
+
+```{r}
+df_cls_counts %>% 
+    ggplot(
+        aes(log10(multiome), log10(spatial))
+    ) + 
+    geom_point(
+        aes(color = Subcortex_Class_v4)
+    ) + 
+    ggrepel::geom_text_repel(
+        aes(label = Subcortex_Class_v4, color = Subcortex_Class_v4),
+        size=2, family="ArialMT"
+    ) + 
+    scale_x_continuous(labels = scales::math_format(10^.x)) + 
+    scale_y_continuous(labels = scales::math_format(10^.x)) + 
+    # geom_smooth(method="lm", color="black") + 
+    scale_color_manual(values = palettes$Class) + 
+    ggpubr::stat_cor() +
+    labs(
+        x = "Multiome Cells per Class",
+        y = "Spatial Cells per Class",
+        title = "Neurons"
+    ) + 
+    theme_md_classic()
+```
+
+```{r}
+df_cls_counts %>% 
+    filter(!Subcortex_Class_v4 %in% c("Nonneuron", "Pineal Gland")) %>% 
+    ggplot(
+        aes(log10(multiome), log10(spatial))
+    ) + 
+    geom_point(
+        aes(color = Subcortex_Class_v4)
+    ) + 
+    ggrepel::geom_text_repel(
+        aes(label = Subcortex_Class_v4, color = Subcortex_Class_v4),
+        size=2, family="ArialMT"
+    ) + 
+    scale_x_continuous(labels = scales::math_format(10^.x)) + 
+    scale_y_continuous(labels = scales::math_format(10^.x)) + 
+    # geom_smooth(method="lm", color="black") + 
+    scale_color_manual(values = palettes$Class) + 
+    ggpubr::stat_cor() +
+    labs(
+        x = "Multiome Cells per Class",
+        y = "Spatial Cells per Class",
+        title = "Neuron Classes"
+    ) + 
+    theme_md_classic() + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "cell_abundance_comparisons_neuron_classes.pdf"),
+    width=43, height=46, units="mm"
+)
+```
+
+with regline
+
+```{r}
+df_cls_counts %>% 
+    filter(!Subcortex_Class_v4 %in% c("Nonneuron", "Pineal Gland")) %>% 
+    ggplot(
+        aes(log10(multiome), log10(spatial))
+    ) + 
+    geom_smooth(method="lm", se=FALSE, color="black") +
+    geom_point(
+        aes(color = Subcortex_Class_v4)
+    ) + 
+    ggrepel::geom_text_repel(
+        aes(label = Subcortex_Class_v4, color = Subcortex_Class_v4),
+        size=2, family="ArialMT"
+    ) + 
+    scale_x_continuous(labels = scales::math_format(10^.x)) + 
+    scale_y_continuous(labels = scales::math_format(10^.x)) + 
+    scale_color_manual(values = palettes$Class) + 
+    ggpubr::stat_cor() +
+    labs(
+        x = "Multiome Cells per Class",
+        y = "Spatial Cells per Class",
+        title = "Neuron Classes"
+    ) + 
+    theme_md_classic() + 
+    theme(legend.position="none")
+```
+
+```{r}
+ggsave(
+    file.path(pdir_plots, "cell_abundance_comparisons_neuron_classes_regline.pdf"),
+    width=43, height=46, units="mm"
+)
+```
+
