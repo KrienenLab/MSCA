@@ -4,6 +4,13 @@ output: html_document
 date: "2025-10"
 ---
 
+Regional ATAC marker peaks (Figures 7C and S16G).
+
+This notebook has no imports of its own. It was run in the same R session as
+`ATAC_Regulon_Analysis/combined_analysis/notebooks/1_combined_analysis.Rmd`,
+after that notebook's Env, Paths, Utilities and Imports sections, and it uses
+objects created there (for example `obs`, `atac_by_cl_raw`, `atac_by_cl_cpm`
+and `pdir_plots`).
 
 # Find cluster indices for various sets
 
@@ -57,7 +64,7 @@ split(sub(".*_", "", all_rgnt), sub("_.*", "", all_rgnt)) %>%
 ```
 
 
-# [RERUN!] Specificity analysis (non-DESeq2)
+# Specificity analysis (non-DESeq2)
 
 ```{r}
 pdir_peak_spec <- file.path(pdir_plots, "RegionalPeaksBySpecificity")
@@ -149,7 +156,7 @@ rrank_peak_frac_nt <- apply(peak_frac_nt, 2, rev_rank)
 ```
 
 
-## Summarize specificity metric [ugh]
+## Summarize specificity metric
 
 It is effectively "median specificity of the top 2000 most specific peaks", 
 which is the same as saying the specificity of the 1000th most specific peak.

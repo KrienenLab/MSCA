@@ -1,5 +1,5 @@
 ---
-title: "260305_Make_browsershot"
+title: "Make_browsershot"
 output: html_document
 date: "2026-03-05"
 ---
@@ -181,16 +181,11 @@ txdb <- txdbmaker::makeTxDbFromGRanges(gtf)
 txt <- element_text(color = "black", size = 6, family = "ArialMT")
 ```
 
-# Version 2 (with zooms)
+# Browser shots (whole region and zooms)
 
-The entire region being plotted results in the individual peaks being really
-small. So I will try to make a new version that zooms in on several loci.
-
-One thing I need to figure out is how to show the entire region up to. One
-idea is showing loops, which I can make simply in Illustrator.
-
-But for that, I need a plot that shows the gene, each of the enhancers, and the
-zoom regions being used.
+Plotting the entire region makes the individual peaks very small, so the figure
+uses one plot of the whole region (the gene, each of the enhancers, and the zoom
+regions marked) plus zoomed plots of several loci.
 
 
 ```{r}
