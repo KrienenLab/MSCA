@@ -59,7 +59,6 @@ theme_md_classic <- function() {
 
 ```{r}
 pdir <- "/Volumes/krienen/lab_members/mike/260303_MOXD1_Analysis"
-# outdir   <- file.path(pdir, "combined_analysis")
 
 pdir_plots <- file.path(pdir, "plots")
 if (!dir.exists(pdir_plots))
@@ -75,8 +74,6 @@ path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATA
 # multiome atac 
 path_atac_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_462k_peaks_matrix.csv"
 
-# path_obs <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_obs.csv")
-# path_obs <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/preprint_freeze/subcortex_anno_table_preprint.csv"
 path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
 
 path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
@@ -667,7 +664,6 @@ geneAUC_regroups_comb <- rbind(
 )
 
 rownames(geneAUC_regroups_comb) <- gsub("_", " ", rownames(geneAUC_regroups_comb))
-# rownames(geneAUC_regroups_comb) <- sub(" +/+$", " (+/+)", rownames(geneAUC_regroups_comb))
 ```
 
 ### peak rename map

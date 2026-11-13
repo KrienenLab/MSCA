@@ -1,20 +1,18 @@
 # MOXD1 eRegulons in astrocytes and neurons (Figures 4D and 4F)
 
-Code for the z-score heatmaps in Figure 4D and the browser tracks in Figure 4F. This directory mirrors the
-working directory `260303_MOXD1_Analysis`. The notebooks were run interactively and are published as run.
-Absolute paths start with `/Volumes/krienen`, which is `/jukebox/krienen` mounted on a laptop.
+Code for the z-score heatmaps in Figure 4D and the browser tracks in Figure 4F. The notebooks were run
+interactively and are published as run. Paths are absolute: they start with `/Volumes/krienen`, which is the
+lab volume `/jukebox/krienen` mounted on a laptop, and `lab_members/mike/260303_MOXD1_Analysis` in a path is
+this directory.
 
 | Panel | Output file | Code |
 | --- | --- | --- |
-| 4D (heatmaps) | `plots/heatmap_zscore_genes_regulons_peaks2.pdf` | `pipeline/1_Heatmaps_for_MOXD1_Regulons.Rmd` line 839, section "Heatmap w/ eregulons" |
+| 4D (heatmaps) | `plots/heatmap_zscore_genes_regulons_peaks2.pdf` | `pipeline/1_Heatmaps_for_MOXD1_Regulons.Rmd` line 835, section "Heatmap w/ eregulons" |
 | 4D (schematic) | drawn by hand | none |
-| 4F | `browsershot/zoom_wholeRegion1*.pdf`, `zoom_Region1_zoom1_*.pdf`, `zoom_Region1_zoom2_enhancers*.pdf` | `browsershot/260305_Make_browsershot.Rmd` lines 390-632, section "Version 2 (with zooms)" |
+| 4F | `browsershot/zoom_wholeRegion1*.pdf`, `zoom_Region1_zoom1_*.pdf`, `zoom_Region1_zoom2_enhancers*.pdf` | `browsershot/Make_browsershot.Rmd` lines 206-447, section "Browser shots (whole region and zooms)" |
 
 Both panels were edited in Illustrator. In 4D, "Glia" was relabelled "Nonneurons" and the cCREs were renamed
 from E1-E4 to cCRE1-cCRE4. Panel 4F was assembled from the separate whole-region and zoomed plots.
-
-The first half of the browser shot notebook ("shot" to "shot4") is an earlier whole-locus layout that the
-zoomed version replaced.
 
 `browsershot/browser_shot_plotter/` is a copy of the plotting functions the notebook sources, from
 <https://github.com/mdeber/browser_shot_plotter>.

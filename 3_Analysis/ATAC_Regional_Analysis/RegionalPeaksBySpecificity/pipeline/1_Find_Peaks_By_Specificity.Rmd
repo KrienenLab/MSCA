@@ -145,16 +145,6 @@ Z-scoring the whole matrix is expensive, so will only do as needed.
 
 the essence:
 
-```{r}
-# mat_norm %>% 
-#     .[unlist(top20_peaks_by_region), ] %>% 
-#     t %>% 
-#     scale %>% 
-#     t %>% 
-#     .[, colnames(.) %in% rownames(subset(obs, Dominant_Region %in% useable_regions))] ->
-#     mat_sub
-```
-
 
 ```{r}
 make_heatmap <- function(cands_by_region, regions = useable_regions, Z_CLIP=6) {
@@ -314,12 +304,6 @@ frac_in_region <- lapply(peak_sums_regions, "/", peak_sums)
 ```
 
 ## Plot region+NT expression vs. specificity
-
-```{r}
-# for (rg_nt in regions_nt) {
-#     plot(log10(peak_sums_regions_nt[[rg_nt]]), frac_in_region_nt[[rg_nt]], main=rg_nt)
-# }
-```
 
 
 Although, I have to say, the units are so impossible to comprehend. Each cluster
@@ -658,115 +642,6 @@ But big changes in CTX (mostly changed) and AMY is nothing like it was before.
 
 
 Below, I found that there are like 50% more clusters in AMY now.
-
-#### [OLD] Show top20
-
-Not updated since some updates to taxonomy and adding HiF (and more CTX clusters)
-for this analysis. But above I see most are similar (except really AMY and CTX).
-
-```{r}
-top20_peaks_by_comb_rank_region
-```
-
-```
-$AMY
- [1] "chr7:89169956-89170457"   "chr1:134734396-134734897" "chr20:30696426-30696927"  "chr8:9293521-9294022"    
- [5] "chr9:25196208-25196709"   "chr6:12846449-12846950"   "chr13:20226328-20226829"  "chr10:48066605-48067106" 
- [9] "chr9:5141919-5142420"     "chr3:125725186-125725687" "chr1:97069453-97069954"   "chr6:52718954-52719455"  
-[13] "chr22:28363341-28363842"  "chr1:90098657-90099158"   "chr6:110711076-110711577" "chr3:130291474-130291975"
-[17] "chr2:24853471-24853972"   "chr14:29082521-29083022"  "chr4:62683198-62683699"   "chr7:153638958-153639459"
-
-$BF
- [1] "chr21:28675447-28675948"   "chr3:74595975-74596476"    "chr12:107700980-107701481"
- [4] "chr15:94203144-94203645"   "chr6:112503562-112504063"  "chr10:34901936-34902437"  
- [7] "chr18:45821554-45822055"   "chr9:51364440-51364941"    "chrX:105607316-105607817" 
-[10] "chr12:45375721-45376222"   "chr8:71198924-71199425"    "chr3:77878179-77878680"   
-[13] "chr8:63411878-63412379"    "chr4:135929439-135929940"  "chr8:10351912-10352413"   
-[16] "chr2:186922040-186922541"  "chr8:85581086-85581587"    "chr16:73385945-73386446"  
-[19] "chr4:106028604-106029105"  "chr3:62899453-62899954"   
-
-$CTX
- [1] "chr19:40693362-40693863"   "chr6:32290248-32290749"    "chr16:59116292-59116793"  
- [4] "chr8:75401621-75402122"    "chr5:88674606-88675107"    "chr5:133850462-133850963" 
- [7] "chr1:185492437-185492938"  "chr20:33850738-33851239"   "chr12:16813068-16813569"  
-[10] "chr8:94308719-94309220"    "chr4:66899700-66900201"    "chr6:117417005-117417506" 
-[13] "chr16:50374945-50375446"   "chr6:141695513-141696014"  "chr6:87730103-87730604"   
-[16] "chr11:113374057-113374558" "chr4:65792051-65792552"    "chr13:111509492-111509993"
-[19] "chr14:53065634-53066135"   "chr9:74625336-74625837"   
-
-$EXA
- [1] "chr17:45634918-45635419"   "chr6:91184076-91184577"    "chr11:66940060-66940561"  
- [4] "chr1:18531197-18531698"    "chr6:128865034-128865535"  "chr4:50515292-50515793"   
- [7] "chr19:2644959-2645460"     "chr4:41900658-41901159"    "chr6:88548877-88549378"   
-[10] "chr11:35868845-35869346"   "chr12:13093257-13093758"   "chr2:109832680-109833181" 
-[13] "chr21:25368539-25369040"   "chr12:101449832-101450333" "chr1:56633199-56633700"   
-[16] "chr10:37825528-37826029"   "chr6:43206042-43206543"    "chr5:110106528-110107029" 
-[19] "chr1:1247570-1248071"      "chr10:111014542-111015043"
-
-$HTH
- [1] "chr12:16908571-16909072"   "chr11:55239964-55240465"   "chr6:98453798-98454299"   
- [4] "chr2:95006479-95006980"    "chr8:52928378-52928879"    "chr17:23766848-23767349"  
- [7] "chr1:107692263-107692764"  "chr10:118457242-118457743" "chr5:109704627-109705128" 
-[10] "chr1:99247854-99248355"    "chr13:81871767-81872268"   "chr10:82627150-82627651"  
-[13] "chr2:43926058-43926559"    "chrX:38433322-38433823"    "chr12:19398144-19398645"  
-[16] "chr7:26376887-26377388"    "chr10:3963806-3964307"     "chr9:115423313-115423814" 
-[19] "chr15:89733192-89733693"   "chr14:59684701-59685202"  
-
-$MB
- [1] "chr10:79496891-79497392"   "chr14:27130740-27131241"   "chr1:87988454-87988955"   
- [4] "chr12:16604411-16604912"   "chr15:81205091-81205592"   "chr3:167080234-167080735" 
- [7] "chr9:73581466-73581967"    "chr13:92159463-92159964"   "chr2:161950521-161951022" 
-[10] "chr13:101642380-101642881" "chr10:53975505-53976006"   "chr1:149655244-149655745" 
-[13] "chr3:42256122-42256623"    "chr14:15843732-15844233"   "chr11:85446969-85447470"  
-[16] "chr8:89120018-89120519"    "chr10:60352668-60353169"   "chr15:56898570-56899071"  
-[19] "chr14:82947006-82947507"   "chr13:21052531-21053032"  
-
-$THM
- [1] "chr3:16804434-16804935"   "chr18:32268593-32269094"  "chr15:38472414-38472915"  "chr4:157387485-157387986"
- [5] "chr4:29421699-29422200"   "chr14:65043314-65043815"  "chr3:112829305-112829806" "chr4:69204643-69205144"  
- [9] "chr4:21118968-21119469"   "chr19:11756915-11757416"  "chr1:15433900-15434401"   "chr20:3089302-3089803"   
-[13] "chr13:63670235-63670736"  "chr16:28192752-28193253"  "chr8:29509342-29509843"   "chr15:3970350-3970851"   
-[17] "chr14:96658991-96659492"  "chr13:53831227-53831728"  "chr5:140077378-140077879" "chr8:23519098-23519599"  
-```
-
-##### Check THM peaks [unchanged old/new]
-
-Any of these in THM? [These were from the t-test comparison I did]
-```
-chr3:112829305-112829806 - PRKG2 --> [! Yes !]
-chr20:3089302-3089803 - N4BP1    --> [! Yes !]
-chr14:96658991-96659492 - MYCN   --> [! Yes !]
-chr21:35041324-35041825 - KRTAP11-1
-chr6:109199439-109199940 - CABIN2, TMEFF2
-chr8:108284386-108284887 - MTPN
-chr7:136760087-136760588 - PRMT6 (with NTNG1 - https://pmc.ncbi.nlm.nih.gov/articles/PMC4000137/)
-```
-
-It looks like only the top3 carry over.
-
-chr18:32268593-32269094  RGS4 (intragenic) really good
-chr15:38472414-38472915  CAPD4 pretty good
-chr4:29421699-29422200  w/e
-chr4:21118968-21119469 BMP6 (intragenic) not bad
-chr1:15433900-15434401 PCCA (intragenic) not terrible...
-chr20:3089302-3089803  N4BP1 good [saw before]
-chr16:28192752-28193253 TSPYL5 (repressor?) 
-chr14:96658991-96659492 CYRIA (did I see that somewhere before?) doesn't look amazing
-
-chr5:140077378-140077879 ATP12A looks amazing ; but I checked and not in a GRN
-
-##### Check HTH peaks [mostly unchanged]
-(below not updated for updated regional annotations).
-
-These had some of the most impressive peak sharing enrichment scores w/ DESeq2 
-so let's see...
-
-A lot don't look that good but a shocking portion share peaks with the 
-"GABA-Glut" types (mostly EXA Glut-GABA, sometimes THM Glut-GABA), like this:
-chr1:99247854-99248355
-
-But those peaks don't look good, generally they don't look good.
-
 
 # Segregate regional clusters by candidate peak signal
 
@@ -1883,199 +1758,6 @@ names(idx_by_region) <- useable_regions
 cols_in_scope <- sort(unique(unlist(idx_by_region)))
 ```
 
-## [skip] Specificity components for each peak
-
-Actually I don't like this, I don't want to do cluster averages.
-
-```{r}
-eps <- 1e-9
-
-# mean CPM per peak in each (region, NT)
-A_rgnt <- lapply(idx_by_rgnt, function(ix) {
-    list(
-        Glut = if (length(ix$Glut)) rowMeans(mat_norm[, ix$Glut, drop=FALSE]) else rep(0, nrow(mat_norm)),
-        GABA = if (length(ix$GABA)) rowMeans(mat_norm[, ix$GABA, drop=FALSE]) else rep(0, nrow(mat_norm))
-    )
-})
-
-# mean CPM per peak pooled across NTs within region
-A_rg <- lapply(idx_by_region, function(ix) {
-    if (length(ix)) rowMeans(mat_norm[, ix, drop=FALSE]) else rep(0, nrow(mat_norm))
-})
-
-# mean CPM per peak outside each region (within usable scope)
-A_off <- lapply(useable_regions, function(rg) {
-    off_ix <- setdiff(cols_in_scope, idx_by_region[[rg]])
-    if (length(off_ix)) rowMeans(mat_norm[, off_ix, drop=FALSE]) else rep(0, nrow(mat_norm))
-})
-names(A_off) <- useable_regions
-
-# components per region
-score_list <- lapply(useable_regions, function(rg) {
-    A_g <- A_rgnt[[rg]]$Glut
-    A_b <- A_rgnt[[rg]]$GABA
-    A_r <- A_rg[[rg]]
-    A_o <- A_off[[rg]]
-    
-    # regionality
-    R <- A_r / (A_r + A_o + eps)
-    
-    # shared NT strength (geometric mean)
-    G <- sqrt(A_g * A_b)
-    
-    # NT balance (symmetric)
-    B <- 1 - abs(A_g - A_b) / (A_g + A_b + eps)
-    
-    # optional evenness across clusters in region
-    # (compute only if you want it; otherwise set E <- 1)
-    E <- 1
-    # Example Gini (optional; can be computationally heavier):
-    # library(ineq)
-    # region_mat <- mat_norm[, idx_by_region[[rg]], drop=FALSE]
-    # E <- apply(region_mat, 1, function(v) 1 - ineq::Gini(v))
-    
-    # scale G within region to [0,1] by ranks (robust)
-    rk <- rank(G, ties.method = "average")
-    Gs <- (rk - 1) / (length(G) - 1)  # 0..1
-    
-    S <- R * Gs * B * (E^0.5)  # gamma=0.5; or drop E factor
-    
-    tibble::tibble(
-        Peak = rownames(mat_norm),
-        Region = rg,
-        A_glut = A_g,
-        A_gaba = A_b,
-        A_region = A_r,
-        A_off = A_o,
-        Regionality = R,
-        NT_balance = B,
-        SharedStrength_rank = Gs,
-        Score = S
-    )
-})
-scores_df <- dplyr::bind_rows(score_list)
-
-```
-
-### Enforce “regional” by margin vs other regions
-
-Some peaks will look decent in multiple regions. Keep a margin:
-
-```{r}
-scores_df <- scores_df %>%
-    group_by(Peak) %>%
-    mutate(
-        Score_rank = rank(Score, ties.method="average"),
-        Score_best = max(Score, na.rm=TRUE),
-        Score_second = sort(Score, decreasing=TRUE)[pmin(2, n())],
-        Margin = Score_best - ifelse(is.finite(Score_second), Score_second, 0)
-    ) %>%
-    ungroup()
-
-# "Regional peaks" = those for which region is the argmax AND margin >= tau
-tau <- 0.05  # tune after inspecting distribution
-regional_calls <- scores_df %>%
-    group_by(Peak) %>%
-    slice_max(order_by = Score, n = 1, with_ties = FALSE) %>%
-    ungroup() %>%
-    filter(Margin >= tau)
-
-```
-
-### Summaries
-
-Which regions have strong “regional & NT-shared” peaks?
-
-```{r}
-summary_by_region <- regional_calls %>%
-    group_by(Region) %>%
-    summarize(
-        n_regional_peaks = n(),
-        median_score = median(Score, na.rm=TRUE),
-        median_regionality = median(Regionality, na.rm=TRUE),
-        median_balance = median(NT_balance, na.rm=TRUE),
-        .groups="drop"
-    ) %>%
-    arrange(desc(n_regional_peaks))
-```
-
-```{r}
-summary_by_region
-```
-
-
-```{r, fig.width=2, fig.height=2}
-library(ggrepel)
-
-ggplot(
-    summary_by_region,
-    aes(median_regionality, median_balance, label = Region)
-) + 
-    geom_point() + 
-    geom_text_repel(
-        # aes(label = label),
-        # direction = "y",           # stack labels vertically, move horizontally if needed
-        # direction = "x",           # stack labels vertically, move horizontally if needed
-        # nudge_y = 15,               # push labels to the right
-        size = 2.5,
-        box.padding = 0.35,
-        point.padding = 0.25,
-        min.segment.length = 0,      # always draw a segment
-        segment.size = 0.25,
-        segment.color = "black",
-        max.overlaps = Inf,
-        show.legend = FALSE
-    ) +
-    coord_cartesian(xlim = c(0.6, 0.7), ylim = c(0.8, 1)) +
-    theme_md_classic()
-```
-
-
-Also get top 40 based on this score:
-
-```{r}
-top_40peaks_by_region_score <- scores_df %>%
-    group_by(Region) %>%
-    slice_max(order_by = Score, n = 40, with_ties = FALSE) %>%
-    ungroup()
-```
-
-How “shared” across NTs are the selected peaks?
-
-```{r}
-# Distribution of NT_balance among chosen region peaks:
-balance_summary <- regional_calls %>%
-    group_by(Region) %>%
-    summarize(
-        frac_high_balance = mean(NT_balance >= 0.7),  # both NTs present & similar
-        frac_low_balance  = mean(NT_balance <= 0.3),  # mostly single-NT
-        .groups="drop"
-    )
-```
-
-This tells you which regions truly have NT-shared regional peaks vs regions 
-where “regionality” is dominated by one NT.
-
-```{r}
-balance_summary
-```
-
-
-```{r}
-scores_df %>% filter(Region == "MB") %>% 
-    ggplot(
-        aes(x = SharedStrength_rank, y = Regionality, color = NT_balance)
-    ) +
-    geom_point(alpha = 0.3, size = 0.6) +
-    scale_color_viridis_c() +
-    theme_md_classic() +
-    labs(
-        title = "MB peaks: shared NT strength vs regionality",
-        x = "Shared strength (rank within region)",
-        y = "Regionality (A_region / (A_region + A_off))"
-    )
-```
-
 # Redo regionality vs. sharing scores
 
 ## IDEAS
@@ -2224,33 +1906,6 @@ subset(rg_pk_spec, rev_rank_spec <= 1e3) %>%
 stopifnot(all(names(rg_pk_by_rg) == useable_regions))
 ```
 
-### [skip] using rg_nt specificities
-
-```{r}
-top1k_rg_pk_spec_by_nt <- lapply(useable_regions, function(rg) {
-    pks <- rg_pk_by_rg[[rg]]
-    rgnt_spec <- subset(
-        rgnt_pk_spec, 
-        (region == rg) & (peak %in% pks) & (nt %in% c("Glut", "GABA"))
-    )
-    left_join(
-        subset(rgnt_spec, nt == "Glut", select = c("peak", "spec")),
-        subset(rgnt_spec, nt == "GABA", select = c("peak", "spec")),
-        by = "peak", suffix = c("_Glut", "_GABA")
-    )
-})
-names(top1k_rg_pk_spec_by_nt) <- useable_regions
-```
-
-```{r}
-top1k_rg_pk_spec_by_nt$AMY
-```
-
-the regional specificity was fine, but for *sharing*, this is super affected
-by balance (number of clusters).
-
-because we're no longer interested in specificity per se...
-
 ### using clusters
 
 so the issue with using just the NT specificty within a region is that a region
@@ -2258,25 +1913,6 @@ might have a million GABA and 2 Glut clusters or something.
 
 so instead, maybe do the kmeans clustering on the peak signals and see how often
 GABA and Glut clusters end up with high signal??
-
-#### scrap
-
-```{r}
-mat_norm[1:3,1:3]
-```
-
-```{r}
-rg_pk_by_rg$AMY %>% head
-```
-
-```{r}
-idx_by_rgnt$AMY %>% lapply(head)
-idx_by_rgnt$AMY %>% unlist %>% sort %>% head
-```
-
-```{r}
-tmp_mat <- mat_norm[rg_pk_by_rg$AMY, sort(unlist(idx_by_rgnt$AMY))]
-```
 
 #### kmeans segregation
 
@@ -2348,6 +1984,5 @@ more.
 
 This will actually be similar to co-enrichment, to the point that I could 
 probably just use that analysis?
-
 
 

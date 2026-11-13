@@ -4,6 +4,13 @@ output: html_document
 date: "2025-10"
 ---
 
+Regional ATAC marker peaks (Figures 7C and S16G).
+
+This notebook has no imports of its own. It was run in the same R session as
+`ATAC_Regulon_Analysis/combined_analysis/notebooks/1_combined_analysis.Rmd`,
+after that notebook's Env, Paths, Utilities and Imports sections, and it uses
+objects created there (for example `obs`, `atac_by_cl_raw`, `atac_by_cl_cpm`
+and `pdir_plots`).
 
 # Find cluster indices for various sets
 
@@ -57,7 +64,7 @@ split(sub(".*_", "", all_rgnt), sub("_.*", "", all_rgnt)) %>%
 ```
 
 
-# [RERUN!] Specificity analysis (non-DESeq2)
+# Specificity analysis (non-DESeq2)
 
 ```{r}
 pdir_peak_spec <- file.path(pdir_plots, "RegionalPeaksBySpecificity")
@@ -149,7 +156,7 @@ rrank_peak_frac_nt <- apply(peak_frac_nt, 2, rev_rank)
 ```
 
 
-## Summarize specificity metric [ugh]
+## Summarize specificity metric
 
 It is effectively "median specificity of the top 2000 most specific peaks", 
 which is the same as saying the specificity of the 1000th most specific peak.
@@ -528,18 +535,6 @@ for (rg in c("MB", "THM")) {
     # will calculate the rank of the combined-ranks, and then invert those
     # ranks
     
-    # df_gl <- data.frame(
-    #     avg_exp    = log10(peak_sums_rgnt[, rg_gl] / ncl_gl),
-    #     frac_reads = peak_frac_rgnt[, rg_gl],
-    #     comb_rank  = n_peaks - rank(comb_rank_gagl_rgnt[, rg])
-    # ) %>% 
-    #     .[order(.$comb_rank, decreasing = TRUE), ]
-    # df_ga <- data.frame(
-    #     avg_exp    = log10(peak_sums_rgnt[, rg_ga] / ncl_ga),
-    #     frac_reads = peak_frac_rgnt[, rg_ga],
-    #     comb_rank  = n_peaks - rank(comb_rank_gagl_rgnt[, rg])
-    # ) %>% 
-    #     .[order(.$comb_rank, decreasing = TRUE), ]
     
     df_ss <- data.frame(
         frac_gl = peak_frac_rgnt[, rg_gl],
@@ -548,29 +543,6 @@ for (rg in c("MB", "THM")) {
     ) %>% 
         .[order(.$comb_rank, decreasing = TRUE), ]
     
-    # p1 <- ggplot(df_gl, aes(avg_exp, frac_reads, color = comb_rank)) +
-    #     geom_point() +
-    #     geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
-    #     scale_color_viridis_c(trans="log10", direction=-1) + 
-    #     labs(
-    #         title = rg_gl, 
-    #         x = paste0("avg cpm in ", rg_gl, " clusters (log10)"),
-    #         y = paste0("peak specificity\n(fraction normalized reads in ", rg_gl, ")"),
-    #         color = "combined specificity\nranks, in reverse-rank\norder"
-    #     ) + 
-    #     theme_md_classic()
-    # 
-    # p2 <- ggplot(df_ga, aes(avg_exp, frac_reads, color = comb_rank)) +
-    #     geom_point() +
-    #     geom_vline(xintercept = exp_for_unif, linewidth = 0.25, linetype = "dashed") +
-    #     scale_color_viridis_c(trans="log10", direction=-1) + 
-    #     labs(
-    #         title = rg_ga, 
-    #         x = paste0("avg cpm in ", rg_ga, " clusters (log10)"),
-    #         y = paste0("peak specificity\n(fraction normalized reads in ", rg_ga, ")"),
-    #         color = "combined specificity\nranks, in reverse-rank\norder"
-    #     ) + 
-    #     theme_md_classic()
     
     p3 <- ggplot(df_ss, aes(frac_gl, frac_ga, color = comb_rank)) + 
         geom_point() + 
@@ -594,8 +566,6 @@ for (rg in c("MB", "THM")) {
 ```
 
 
-
-
 ### Top 40 candidates by region
 
 ```{r}
@@ -612,16 +582,6 @@ cands_by_region is a named list (names are regions), each element a char vector
 of peak names.
 
 the essence:
-
-```{r}
-# atac_by_cl_cpm %>% 
-#     .[unlist(top20_peaks_by_region), ] %>% 
-#     t %>% 
-#     scale %>% 
-#     t %>% 
-#     .[, colnames(.) %in% rownames(subset(obs, Cluster_Dominant_Region %in% useable_regions))] ->
-#     atac_by_cl_cpm_sub
-```
 
 
 ```{r}

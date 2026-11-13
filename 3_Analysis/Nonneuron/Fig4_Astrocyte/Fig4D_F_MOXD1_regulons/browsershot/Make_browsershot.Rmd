@@ -1,5 +1,5 @@
 ---
-title: "260305_Make_browsershot"
+title: "Make_browsershot"
 output: html_document
 date: "2026-03-05"
 ---
@@ -164,8 +164,6 @@ I think I can make the txdb object
 
 ```{r}
 suppressPackageStartupMessages({
-#     library(AnnotationDbi)
-#     library(txdbmaker)
     library(GenomicFeatures)
 })
 
@@ -183,193 +181,11 @@ txdb <- txdbmaker::makeTxDbFromGRanges(gtf)
 txt <- element_text(color = "black", size = 6, family = "ArialMT")
 ```
 
-# (skip) scrap plots 
+# Browser shots (whole region and zooms)
 
-w/ gene arrow
-
-```{r}
-p <- plot_shot(
-    bw[1:3],
-    bw[4:(length(bw))],
-    region = import_range, 
-    binsize = 100, 
-    ylim = list(c(0, 6), c(0, 1)),
-    annotations = gns_ens, 
-    gene_names = names(gns_ens),
-    model_height = 3,
-    expand_ranges = FALSE
-)
-```
-
-
-```{r}
-ggsave(
-    file.path("shot.pdf"),
-    p & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm" # that's target space but changing dims works better
-    width=90, height=90, units="mm"
-)
-```
-
-```{r}
-ggsave(
-    file.path("shot2.pdf"),
-    p & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=100, height=70, units="mm"
-)
-```
-
-
-```{r}
-p2 <- plot_shot(
-    bw[1:3],
-    bw[4:(length(bw))],
-    region = import_range, 
-    binsize = 100, 
-    ylim = list(c(0, 6), c(0, 1)),
-    annotations = txdb, 
-    # gene_names = names(gns_ens),
-    model_height = 3,
-    expand_ranges = FALSE
-)
-```
-
-```{r}
-ggsave(
-    file.path("shot2_genemodel.pdf"),
-    p2 & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=100, height=70, units="mm"
-)
-```
-
-```{r}
-ggsave(
-    file.path("shot2_genemodel2.pdf"),
-    p2 & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=200, height=70, units="mm"
-)
-```
-
-let free y limits reign
-
-```{r}
-p3 <- plot_shot(
-    bw[1:3],
-    bw[4:(length(bw))],
-    region = import_range, 
-    binsize = 100, 
-    # ylim = list(c(0, 6), c(0, 1)),
-    annotations = txdb, 
-    # gene_names = names(gns_ens),
-    model_height = 3,
-    expand_ranges = FALSE
-)
-```
-
-```{r}
-ggsave(
-    file.path("shot3_genemodel.pdf"),
-    p3 & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=200, height=70, units="mm"
-)
-```
-
-# Final plots
-
-```{r}
-p4 <- plot_shot(
-    bw[1:3],
-    bw[4:(length(bw))],
-    region = import_range, 
-    binsize = 250, 
-    # ylim = list(c(0, 6), c(0, 1)),
-    annotations = txdb, 
-    # gene_names = names(gns_ens),
-    model_height = 3,
-    expand_ranges = FALSE
-)
-```
-
-```{r}
-ggsave(
-    file.path("shot4_genemodel.pdf"),
-    p4 & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=200, height=70, units="mm"
-)
-```
-
-also need that without the gene model, because it has the enhancer locations marked
-
-```{r}
-p4_enh <- plot_shot(
-    bw[1:3],
-    bw[4:(length(bw))],
-    region = import_range, 
-    binsize = 250, 
-    # ylim = list(c(0, 6), c(0, 1)),
-    # annotations = txdb, 
-    annotations = gns_ens,
-    gene_names = names(gns_ens),
-    model_height = 3,
-    expand_ranges = FALSE
-)
-```
-
-(they don't come out to the same size b/c label size/location changes, but
-not a problem in Illustrator)
-
-```{r}
-ggsave(
-    file.path("shot4.pdf"),
-    p4_enh & theme(
-        axis.text.y = txt,
-        strip.text = txt
-    ),
-    # width=90, height=60, units="mm"
-    width=170, height=70, units="mm"
-)
-```
-
-
-# Summary
-
-In the end it's browser shot4 being used, with the genemodel being resized
-and substituted in for the genearrow, but the genearrow plot being the one 
-used because it marks the exact enhancer locations.
-
-# Version 2 (with zooms)
-
-The entire region being plotted results in the individual peaks being really
-small. So I will try to make a new version that zooms in on several loci.
-
-One thing I need to figure out is how to show the entire region up to. One
-idea is showing loops, which I can make simply in Illustrator.
-
-But for that, I need a plot that shows the gene, each of the enhancers, and the
-zoom regions being used.
+Plotting the entire region makes the individual peaks very small, so the figure
+uses one plot of the whole region (the gene, each of the enhancers, and the zoom
+regions marked) plus zoomed plots of several loci.
 
 
 ```{r}
@@ -540,7 +356,6 @@ ggsave(
 ```
 
 also do a short version (all 0.35)
-
 
 
 ```{r}

@@ -4,18 +4,15 @@ output: html_document
 date: "2025-10-15"
 ---
 
-CleaningUp2 file has all the variable names changed and a bunch of stuff
-brought to the top of the script.
+Main analysis notebook for the eRegulon figures (Figures 3 and 5, and
+Supplemental Figures S12B-D, S13 and S16E-F).
 
-I think it's probably basically all good. (I think CleaningUp1 has stuff brought
-to front and more road-signs indicated where it originally came from, but no
-variable name changes I think).
-
-CleaningUp3 changed to revision objects, and entire first section updated
-(so all the imports), although should probably write out all those matrices
-and organize them in lists, etc.
-
-CleaningUp4 will start slashing out unused code.
+The first four sections (Env, Paths, Utilities, Imports) load the Cluster-level
+RNA and ATAC count matrices, the SCENIC+ eRegulons, the AUCell scores, the
+annotation table and the DESeq2 results. Each later section covers one analysis.
+The notebook was run interactively, section by section, and it includes
+exploratory analyses that are not in the paper. The README of
+`ATAC_Regulon_Analysis` maps each figure panel to the section that makes it.
 
 # Env
 
@@ -98,8 +95,6 @@ path_rna_by_cl_raw <- file.path(pdir, "common_data/Cluster_v4_by_genes_matrix.cs
 
 # ATAC matrix
 path_atac_by_cl_raw <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_matrix.csv")
-# path_obs <- file.path(pdir, "common_data/Cluster_v4_by_462k_peaks_obs.csv")
-# path_obs <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/preprint_freeze/subcortex_anno_table_preprint.csv"
 path_obs <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata/revision/subcortex_anno_table_updated_clean_20260218.csv"
 
 
@@ -548,7 +543,6 @@ THM Glut cluster that lacked ATAC data).
 Also only use clusters in the `preprint_analysis_include` set.
 
 ```{r}
-# obs <- subset(obs, preprint_analysis_include)
 obs <- subset(obs, !inconclusive_mapping)
 # > setdiff(rownames(obs), colnames(atac_by_cl_raw))
 # [1] "cluster_628" # <--- THM Glut cluster w/o ATAC
@@ -809,10 +803,6 @@ Use rna mean for class just to find backgroud neuron gene expression for
 an enrichment analysis (LGE vs. TEL Glut convergence vignette):
 
 ```{r}
-# stopifnot(all(colnames(rna_by_cl_cpm) == rownames(obs)))
-# rna_class_mean_cpm <- t(apply(
-#     rna_by_cl_cpm, 1, function(x) tapply(x, obs$Subcortex_Class_v4, mean)
-# ))
 
 ## actually not really used, i decided against using the background b/c so
 ## many genes are expressed in brain anyway
@@ -1158,157 +1148,6 @@ Existing one is just no good.
 # [13] "SEP GABA"       "TEL Glut"       "THM GABA"       "THM Glut" 
 ```
 
-## [skip] With z-scores
-
-```{r}
-left_join(
-    reshape2::melt(
-        geneAUC_neur_dir_pp_by_class_z,      
-        varnames = c("regulon", "class"), 
-        value.name = "gene_AUC"
-    ),
-    reshape2::melt(
-        peakAUC_neur_dir_pp_by_class_z, 
-        varnames = c("regulon", "class"), 
-        value.name = "peak_AUC"
-    ),
-    by = c("regulon", "class")
-) %>% 
-    filter(class != "Nonneuron") %>% 
-    (function(x) {
-        # all direct +/+
-        stopifnot(all(
-            sub(".*_", "", x$regulon) == "+/+"
-        ))
-        stopifnot(all(grepl("direct", x$regulon)))
-        x
-    }) %>% 
-    mutate(
-        TF = sub("_.*", "", regulon)
-    ) -> df
-
-# go back to matrix to get row/col order
-mat <- df %>%
-    select(TF, class, gene_AUC) %>%
-    pivot_wider(names_from = class, values_from = gene_AUC) %>%
-    column_to_rownames("TF") %>%
-    as.matrix()
-
-row_order <- hclust(dist(mat))$order
-col_order <- hclust(dist(t(mat)))$order
-
-```
-
-
-```{r, fig.width=7, fig.height=3}
-df %>%
-    mutate(
-        TF    = factor(TF,    levels = rownames(mat)[row_order]),
-        class = factor(class, levels = colnames(mat)[col_order])
-    ) %>% 
-    ggplot(
-        aes(TF, class)
-    ) + 
-    geom_raster(
-        aes(fill = gene_AUC)
-    ) + 
-    geom_point(
-        aes(size = peak_AUC),
-        shape  = 1,
-        stroke = 0.1,
-        fill   = NA
-    ) + 
-    scale_fill_gradient2(
-        low  = "blue", mid = "#EEEEEE", high = "red"
-    ) + 
-    scale_size(range = c(0.001,1)) +
-    theme_md_classic() + 
-    theme(
-        axis.line = element_blank(),
-        axis.text.x = element_text(angle=90, hjust=1, vjust=0.5),
-        legend.position = "top"
-    )
-```
-
-```{r}
-ggsave(file.path(pdir_plots, "heatmap_regulon_by_class_z_neurons.pdf"), width=7, height=3)
-```
-
-
-Do without z-scores...
-
-```{r}
-left_join(
-    reshape2::melt(
-        geneAUC_neur_dir_pp_by_class,      
-        varnames = c("regulon", "class"), 
-        value.name = "gene_AUC"
-    ),
-    reshape2::melt(
-        peakAUC_neur_dir_pp_by_class, 
-        varnames = c("regulon", "class"), 
-        value.name = "peak_AUC"
-    ),
-    by = c("regulon", "class")
-) %>% 
-    filter(class != "Nonneuron") %>% 
-    (function(x) {
-        # all direct +/+
-        stopifnot(all(
-            sub(".*_", "", x$regulon) == "+/+"
-        ))
-        stopifnot(all(grepl("direct", x$regulon)))
-        x
-    }) %>% 
-    mutate(
-        TF = sub("_.*", "", regulon)
-    ) -> df
-
-# go back to matrix to get row/col order
-mat <- df %>%
-    select(TF, class, gene_AUC) %>%
-    pivot_wider(names_from = class, values_from = gene_AUC) %>%
-    column_to_rownames("TF") %>%
-    as.matrix()
-
-row_order <- hclust(dist(mat))$order
-col_order <- hclust(dist(t(mat)))$order
-```
-
-
-```{r, fig.width=7, fig.height=3}
-df %>%
-    mutate(
-        TF    = factor(TF,    levels = rownames(mat)[row_order]),
-        class = factor(class, levels = colnames(mat)[col_order])
-    ) %>% 
-    ggplot(
-        aes(TF, class)
-    ) + 
-    geom_raster(
-        aes(fill = gene_AUC)
-    ) + 
-    geom_point(
-        aes(size = peak_AUC),
-        shape  = 1,
-        stroke = 0.1,
-        fill   = NA
-    ) + 
-    scale_fill_gradient2(
-        low  = "blue", mid = "#EEEEEE", high = "red",
-        midpoint=0.2
-    ) + 
-    scale_size(range = c(0.001,1)) +
-    theme_md_classic() + 
-    theme(
-        axis.line = element_blank(),
-        axis.text.x = element_text(angle=90, hjust=1, vjust=0.5),
-        legend.position = "top"
-    )
-```
-
-that doesn't work.
-
 ## Using min-max scaling
 
 try scaling each so that max is 1?
@@ -1391,15 +1230,10 @@ df %>%
     )
 ```
 
-```{r}
-# ggsave(file.path(pdir_plots, "heatmap_regulon_by_class_neurons.pdf"), width=7, height=3)
-```
 
 Try to reorder like SCENIC+?
 
 ```{r}
-# --- existing ---
-# mat <- ... (rows = TF, cols = class, values = gene_AUC)
 
 # Row/column (class) order for the heatmap rows
 class_order  <- hclust(dist(t(mat)))$order
@@ -1582,9 +1416,6 @@ mat <- df %>%
     as.matrix()
 
 
-# --- existing ---
-# mat <- ... (rows = TF, cols = class, values = gene_AUC)
-
 # Row/column (class) order for the heatmap rows
 class_order  <- hclust(dist(t(mat)))$order
 class_levels <- colnames(mat)[class_order]
@@ -1641,9 +1472,6 @@ df %>%
 ```{r}
 ggsave(file.path(pdir_plots, "heatmap_regulon_by_class_neurons.pdf"), width=6.4, height=2.4)
 ```
-
-
-
 
 
 # Regulons by Region analysis
@@ -1848,9 +1676,6 @@ for (nt in colnames(geneAUC_neur_dir_pp_by_nt_z)) {
         col = col_fun,
         # show_column_names = FALSE,
         column_title = paste(nt, "clusters")
-        # heatmap_legend_param = list(
-        #     legend_direction = "horizontal"
-        # )
     ) 
     pdf(file.path(plt_dir, paste0(nt, ".pdf")), width=4, height=3)
     # draw(ht, heatmap_legend_side = "bottom")
@@ -2503,9 +2328,6 @@ otx2_neur_v_glia_peaks <- list(
     arrange(diff) 
 ```
 
-```{r}
-# top_otx2_targets <- c(top_otx2_neur_targets, top_otx2_glia_targets)
-```
 
 Start by plotting all genes/peaks against each other (can be multiple peaks
 per gene).
@@ -2829,7 +2651,6 @@ ggplot(
 ```
 
 
-
 ```{r}
 ggsave(
     file.path(pdir_otx2, "redo_OTX2_target_lfc_gene_v_peak_noTargetGenePeaks.pdf"),
@@ -3110,8 +2931,6 @@ ggsave(
 ##### How many co-targets: NFIA, DMX1B, GATA3 targets
 
 
-
-
 #### TF-pair co-enrichment
 
 TF pairs that co-enrich?
@@ -3181,7 +3000,6 @@ enrich_pairs <- pair_long %>%
 ```
 
 
-
 ### Grab some targets for new network
 
 Interested in some of the top hits, but enriching for those with other TF
@@ -3210,7 +3028,6 @@ edges <- otx2_top_neur_v_glia_genes_peaks %>%
     mutate(from=TF, to=Gene, dir=ifelse(regulation==1, "+", "-")) %>% 
     distinct()
 ```
-
 
 
 ```{r}
@@ -3331,10 +3148,6 @@ p <- ggraph(g, layout = "fr") +
         midpoint = 0, 
         limits = c(-4, 4),
         oob = scales::squish,
-        # limits = c(
-        #     min(V(g)$score, na.rm = TRUE),
-        #     max(V(g)$score, na.rm = TRUE)
-        # )
     ) +
     # scale_size_continuous(
     #     name = "Betweenness", range = c(1, 3)
@@ -3368,7 +3181,6 @@ ggsave(
     width = 120, height = 60, units = "mm"
 )
 ```
-
 
 
 # TEL Glut vs LGE (MSN & LGE_STR_GABA)
@@ -4161,521 +3973,6 @@ write(
 ```
 
 
-
-## [skip] Look for similar in MGE-CTX/STR and Chol STR
-
-"MGE cortical/striatal interneurons, cholinergic str interneurons (e.g nkx2.1
-lineage) also receive thalamic input. if you did the same string-db analysis on
-their shared eregs would you get different postsynaptic density gene loadings?
-i.e. should largely lack camk2a, gria2 but maybe have other psd genes like
-gria4, erbb4 & dlg1?"
-
-
-### Get Groups (all MGE GABA and Chol STR?)
-
-```{r}
-# obs %>%
-#     filter(
-#         grepl("MGE", GE_RegionNT_Complete),
-#         Cluster_NT == "GABA"
-#     ) %>%
-#     select(Subcortex_Group_v4) %>%
-#     unique %>%
-#     .$Subcortex_Group_v4 %>%
-#     sort %>% 
-#     paste(collapse = "\n") %>%
-#     cat
-
-# CTX PVALB Chandelier GABA
-# CTX PVALB GABA
-# LAMP5-LHX6 GABA
-# STR FS PTHLH-PVALB GABA
-# STR LYPD6-RSPO2 GABA
-# STR SST-ADARB2 GABA
-# STR SST-CHODL GABA
-# STR SST-RSPO2 GABA
-# STR TAC3-PLPP4 GABA
-# STR-BF TAC3-PLPP4-LHX8 GABA
-```
-
-```{r}
-rna_group_mean_cpm %>% 
-    .["NKX2-1", ] %>% 
-    sort(TRUE) %>% 
-    .[grep("GABA", names(.))] %>% 
-    head(30) 
-```
-
-```{r}
-rna_group_mean_cpm %>% 
-    .["NKX2-1", ,drop=FALSE] %>% 
-    .[, grep("Chol", colnames(.))] %>% 
-    sort(TRUE) 
-```
-
-
-### Get Functional gene sets from co-enriched
-
-based on the stringdb enrichments, have defined some of these functional 
-gene modules, and i want to see how they look through the taxonomy.
-
-```{r}
-
-# Strict gene sets: restricted to genes actually present in the TEL Glut–LGE shared list
-lge_tel_glut_genesets_full <- list(
-
-    # Canonical MAGUK / SAPAP / PSD scaffold axis.
-    # Best "core PSD" readout for the shared TEL Glut–LGE module.
-    psd_core_scaffold = c(
-        "DLG1",
-        "DLG2",
-        "DLG4",
-        "DLGAP2",
-        "DLGAP3",
-        "DLGAP4",
-        "LRRC7",
-        "SYNGAP1",
-        "CNKSR2"
-    ),
-
-    # Genes more tied to spine structure / spine-associated postsynaptic compartment,
-    # rather than just the core scaffold itself.
-    spine_remodeling = c(
-        "IQSEC2",
-        "PTK2B",
-        "ACTN1",
-        "SYNPO",
-        "SIPA1L1",
-        "RIN1",
-        "RAP2A",
-        "RAPGEF5",
-        "RASAL1"
-    ),
-
-    # Ca2+-responsive postsynaptic signaling / plasticity module.
-    # Useful for testing whether a taxon carries the activity-dependent part
-    # of the shared program, not just scaffold genes.
-    calcium_plasticity = c(
-        "CAMK2A",
-        "CAMK1D",
-        "CAMKK1",
-        "CAMKK2",
-        "PPP3CA",
-        "PPP3R1",
-        "ITPR1",
-        "RYR2",
-        "SLC8A2",
-        "CACNA1C",
-        "CACNA1E",
-        "CACNA1F",
-        "KCNIP3",
-        "KCNIP4",
-        "HPCAL4",
-        "NECAB1",
-        "PTK2B",
-        "KCNJ4",
-        "KCNH1"
-    ),
-
-    # Small-GTPase / Ras-Rap signaling adjacent to the PSD.
-    # Good for asking whether the shared program includes the
-    # signaling/remodeling layer and not only structural PSD genes.
-    ras_rap_psd_signaling = c(
-        "SYNGAP1",
-        "IQSEC2",
-        "RAP2A",
-        "RAPGEF5",
-        "RASAL1",
-        "RIN1",
-        "SIPA1L1",
-        "ARAP1",
-        "RASGEF1A",
-        "PTPN11",
-        "SPRED1"
-    ),
-
-    # AMPAR-proximal / receptor-organization module.
-    # Kept strict to genes actually in the shared list; do not force in
-    # GRIA1 or GRIN2B here if absent from this dataset.
-    ampar_receptor_proximal = c(
-        "GRIA2",
-        "GSG1L",
-        "DLG1",
-        "DLG2",
-        "DLG4",
-        "DLGAP2",
-        "DLGAP3",
-        "DLGAP4",
-        "SYNGAP1",
-        "CAMK2A",
-        "PTK2B",
-        "PTPN11"
-    ),
-
-    # Broader circuit-assembly / input-maturation genes.
-    # This is less "PSD core" and more "wiring / synapse maturation".
-    wiring_synapse_maturation = c(
-        "TYRO3",
-        "NTRK3",
-        "CELSR2",
-        "SLIT3",
-        "ADGRB2",
-        "PTPN11",
-        "SPRED1"
-    ),
-
-    # Secondary/supporting signal: neuronal RNA-processing / maturation.
-    # Not as specific as the PSD story, but useful to ask whether the shared
-    # program extends into post-transcriptional maturation.
-    neuronal_splicing_maturation = c(
-        "RBFOX1",
-        "RBFOX3",
-        "CELF1",
-        "CELF2",
-        "CELF5",
-        "MBNL2",
-        "HNRNPLL"
-    ),
-
-    # High-risk supplementary signal.
-    # Split structural cilia genes from ciliary GPCR/signaling genes so you can
-    # distinguish "generic cilia load" from a more neuron-like ciliary signal.
-    cilia_structural = c(
-        "CFAP57",
-        "CFAP73",
-        "CFAP74",
-        "CYS1",
-        "DZIP1L",
-        "SSX2IP",
-        "DNAAF10",
-        "DNHD1",
-        "RSPH10B",
-        "NEK10"
-    ),
-
-    cilia_signaling = c(
-        "HTR6",
-        "NPY5R"
-    ),
-    
-    # ------------------------------------------------------------------
-    # Exploratory comparator sets: NOT restricted to the current TEL Glut–LGE list
-    # These are for follow-up taxonomy comparisons, not for claiming they were
-    # part of the original shared-gene result.
-    # ------------------------------------------------------------------
-    
-    # Candidate interneuron / CIN excitatory-input module.
-    # This is meant as a comparison set for MGE/CIN-like lineages, where one
-    # might expect more ERBB4 / GRIA4-type flavor than the TEL Glut–LGE core.
-    mge_cin_excitatory_input = c(
-        "ERBB4",
-        "GRIA4",
-        "GRIA2",
-        "DLG1",
-        "DLG4",
-        "PTK2B",
-        "CAMK2A"
-    ),
-
-    # Very small discriminator set for a more "principal/spiny-recipient-like"
-    # postsynaptic program.
-    principal_spiny_like_psd = c(
-        "DLGAP2",
-        "DLGAP3",
-        "DLGAP4",
-        "LRRC7",
-        "SYNGAP1",
-        "CAMK2A",
-        "PTK2B",
-        "ACTN1",
-        "SYNPO",
-        "GRIA2"
-    )
-)
-
-# "Spiny glutamatergic recipient" hypothesis:
-# useful for the question "is this more spine-based / principal-or-MSN-like?"
-lge_tel_glut_genesets_full$spiny_glut_recipient <- unique(c(
-    lge_tel_glut_genesets_full$psd_core_scaffold,
-    c("ACTN1", "SYNPO", "PTK2B", "CAMK2A", "GRIA2")
-))
-
-# # Convenient broader unions for plotting / scoring
-# lge_tel_glut_genesets$psd_broad <- unique(c(
-#     lge_tel_glut_genesets$psd_core_scaffold,
-#     lge_tel_glut_genesets$spine_remodeling,
-#     lge_tel_glut_genesets$ampar_receptor_proximal,
-#     lge_tel_glut_genesets$calcium_plasticity
-# ))
-
-lge_tel_glut_genesets_inenr <- lapply(
-    lge_tel_glut_genesets_full,
-    function(x) x[x %in% tel_glut_lge_coenr_genes_and_regs$Gene]
-)
-
-# mapply(setdiff, lge_tel_glut_genesets_full, lge_tel_glut_genesets_inenr) %>% 
-#     .[lengths(.)>0]
-
-# $mge_cin_excitatory_input
-# [1] "ERBB4" "GRIA4"
-```
-
-it's just 2 genes different, related to this idea that a more general 
-inteneuron input
-
-### Heatmap across taxonomy (by GE_RegionNT_Comp)
-
-```{r}
-# ------------------------------------------------------------------
-# Inputs assumed to already exist:
-#   rna_by_ge_rgnt_comp_cpm_z   # matrix: rows = genes, cols = taxonomy groups
-#   lge_tel_glut_genesets_inenr # named list of gene vectors
-# ------------------------------------------------------------------
-
-# ---- font settings ----
-gp6 <- gpar(
-    fontsize   = 6,
-    fontfamily = "ArialMT",
-    fontface   = "plain"
-)
-
-# # ---- keep only genes that are actually present in the matrix ----
-# genesets_plot <- lapply(
-#     lge_tel_glut_genesets_full,
-#     function(x) unique(x[x %in% rownames(rna_by_ge_rgnt_comp_cpm_z)])
-# )
-# genesets_plot <- genesets_plot[lengths(genesets_plot) > 0]
-
-# ---- stack all gene sets into one row mapping table ----
-# genes are allowed to recur across sets
-row_map <- do.call(
-    rbind,
-    lapply(names(lge_tel_glut_genesets_full), function(gs) {
-        data.frame(
-            geneset = gs,
-            gene    = lge_tel_glut_genesets_full[[gs]],
-            stringsAsFactors = FALSE
-        )
-    })
-)
-
-# unique internal row IDs so duplicate genes can appear multiple times
-row_map$row_id <- make.unique(paste(row_map$geneset, row_map$gene, sep = "__"))
-
-# ---- assemble plotting matrix ----
-mat_plot <- rna_by_ge_rgnt_comp_cpm_z[row_map$gene, , drop = FALSE]
-rownames(mat_plot) <- row_map$row_id
-
-# row labels shown on plot = original gene symbols
-row_labels <- row_map$gene
-
-# preserve the gene-set order from the list
-row_split <- factor(row_map$geneset, levels = names(lge_tel_glut_genesets_full))
-
-# ---- optional: preserve current column order exactly ----
-# col_ord <- colnames(mat_plot)
-# mat_plot <- mat_plot[, col_ord, drop = FALSE]
-
-# ---- color scale for z-scores ----
-# cap at 4 so a few extreme values do not wash everything out
-zlim <- max(abs(mat_plot), na.rm = TRUE)
-zlim <- min(4, ceiling(zlim * 10) / 10)
-
-colnames(mat_plot) <- gsub("_", " ", colnames(mat_plot))
-
-# ---- heatmap ----
-ht <- Heatmap(
-    mat_plot,
-    name = "RNA z",
-    col  = col_fun,
-    na_col = "grey90",
-
-    # keep order as supplied
-    cluster_rows = FALSE,
-    cluster_columns = TRUE,
-    cluster_row_slices = FALSE,
-    cluster_column_slices = FALSE,
-
-    # split rows by gene set, with visible gaps between sections
-    row_split = row_split,
-    row_gap   = unit(2, "mm"),
-
-    # names
-    show_row_names    = TRUE,
-    show_column_names = TRUE,
-    row_labels        = row_labels,
-
-    row_names_side = "left",
-    row_names_gp   = gp6,
-    column_names_gp = gp6,
-    column_names_rot = 45,
-    row_names_max_width = max_text_width(row_labels, gp = gp6) + unit(2, "mm"),
-
-    # slice titles = gene set names
-    row_title_gp  = gp6,
-    row_title_rot = 0,
-
-    # legend text
-    heatmap_legend_param = list(
-        title_gp  = gp6,
-        labels_gp = gp6
-    ),
-
-    # borders / dendrograms
-    border = FALSE,
-    show_row_dend = FALSE,
-    show_column_dend = FALSE
-)
-
-draw(
-    ht,
-    heatmap_legend_side = "right"
-)
-```
-
-```{r}
-pdf(
-    file.path(pdir_tel_glut_lge, "heatmap_coenrPlusMore_gene_modules_by_gergntcomp.pdf"),
-    width=7, height=9
-)
-draw(ht, heatmap_legend_side = "right")
-invisible(dev.off())
-```
-
-
-#### Restrict to tel glut, lge, mge
-
-```{r}
-# ------------------------------------------------------------------
-# Inputs assumed to already exist:
-#   rna_by_ge_rgnt_comp_cpm_z   # matrix: rows = genes, cols = taxonomy groups
-#   lge_tel_glut_genesets_inenr # named list of gene vectors
-# ------------------------------------------------------------------
-
-# ---- font settings ----
-gp6 <- gpar(
-    fontsize   = 6,
-    fontfamily = "ArialMT",
-    fontface   = "plain"
-)
-
-# # ---- keep only genes that are actually present in the matrix ----
-# genesets_plot <- lapply(
-#     lge_tel_glut_genesets_full,
-#     function(x) unique(x[x %in% rownames(rna_by_ge_rgnt_comp_cpm_z)])
-# )
-# genesets_plot <- genesets_plot[lengths(genesets_plot) > 0]
-
-# ---- stack all gene sets into one row mapping table ----
-# genes are allowed to recur across sets
-row_map <- do.call(
-    rbind,
-    lapply(names(lge_tel_glut_genesets_full), function(gs) {
-        data.frame(
-            geneset = gs,
-            gene    = lge_tel_glut_genesets_full[[gs]],
-            stringsAsFactors = FALSE
-        )
-    })
-)
-
-# unique internal row IDs so duplicate genes can appear multiple times
-row_map$row_id <- make.unique(paste(row_map$geneset, row_map$gene, sep = "__"))
-
-# ---- assemble plotting matrix ----
-mat_plot <- rna_by_ge_rgnt_comp_cpm_z[row_map$gene, , drop = FALSE]
-rownames(mat_plot) <- row_map$row_id
-
-# row labels shown on plot = original gene symbols
-row_labels <- row_map$gene
-
-# preserve the gene-set order from the list
-row_split <- factor(row_map$geneset, levels = names(lge_tel_glut_genesets_full))
-
-# ---- optional: preserve current column order exactly ----
-# col_ord <- colnames(mat_plot)
-# mat_plot <- mat_plot[, col_ord, drop = FALSE]
-
-# ---- color scale for z-scores ----
-# cap at 4 so a few extreme values do not wash everything out
-zlim <- max(abs(mat_plot), na.rm = TRUE)
-zlim <- min(4, ceiling(zlim * 10) / 10)
-
-
-### SUBSET MATRIX
-cols_keep <- c(
-    lge_main_group, tel_glut_rgnt, 
-    grep("MGE", colnames(mat_plot), value=TRUE)
-)
-mat_plot <- mat_plot[, cols_keep]
-
-colnames(mat_plot) <- gsub("_", " ", colnames(mat_plot))
-
-# ---- heatmap ----
-ht <- Heatmap(
-    mat_plot,
-    name = "RNA z",
-    col  = col_fun,
-    na_col = "grey90",
-
-    # keep order as supplied
-    cluster_rows = FALSE,
-    cluster_columns = TRUE,
-    cluster_row_slices = FALSE,
-    cluster_column_slices = FALSE,
-
-    # split rows by gene set, with visible gaps between sections
-    row_split = row_split,
-    row_gap   = unit(2, "mm"),
-
-    # names
-    show_row_names    = TRUE,
-    show_column_names = TRUE,
-    row_labels        = row_labels,
-
-    row_names_side = "left",
-    row_names_gp   = gp6,
-    column_names_gp = gp6,
-    column_names_rot = 45,
-    row_names_max_width = max_text_width(row_labels, gp = gp6) + unit(2, "mm"),
-
-    # slice titles = gene set names
-    row_title_gp  = gp6,
-    row_title_rot = 0,
-
-    # legend text
-    heatmap_legend_param = list(
-        title_gp  = gp6,
-        labels_gp = gp6
-    ),
-
-    # borders / dendrograms
-    border = FALSE,
-    show_row_dend = FALSE,
-    show_column_dend = FALSE
-)
-
-draw(
-    ht,
-    heatmap_legend_side = "right"
-)
-```
-
-```{r}
-pdf(
-    file.path(pdir_tel_glut_lge, "heatmap_coenrPlusMore_gene_modules_by_gergntcomp_focus.pdf"),
-    width=5, height=9
-)
-draw(ht, heatmap_legend_side = "right")
-invisible(dev.off())
-```
-
-### (!) Better idea
-
-So many genes in multiple gene sets.
-Instead, show a heatmap, no genes duplicated, but have a marginal heatmap
-that annotates a bunch of gene sets (using GO/KEGG/literature co-mentions).
-
 ## (!) Import stringdb results
 
 ```{r}
@@ -4720,18 +4017,6 @@ names(lge_tel_glut_stringenr) <- nm_map[names(lge_tel_glut_stringenr)]
 unique(lge_tel_glut_stringenr$category)
 ```
 
-
-```{r}
-# lge_tel_glut_stringenr %>% 
-#     mutate(category_description = paste0(category, ": ", term_description)) %>% 
-#     filter(
-#         !category %in% c("Monarch"),
-#         
-#     ) %>% 
-#     filter(strength>1) %>% 
-#     (function(x) setNames(x$matching_protein, x$category_description)) %>% 
-#     lapply(function(x) str_split(x, ",")[[1]])
-```
 
 ### Select some existing terms 
 
@@ -5651,37 +4936,6 @@ invisible(dev.off())
 ```
 
 
-## (skip) Export a background for enrichment analysis
-
-Idea to just use expression in all neurons basically.
-
-```{r}
-rna_group_mean_cpm[1:3,1:3]
-```
-
-```{r}
-rna_class_mean_cpm %>% 
-    .[, !colnames(.) == "Nonneuron"] %>% 
-    rowMeans %>% 
-    sort(TRUE) %>% 
-    data.frame %>% 
-    setNames("cpm") %>% 
-    tibble::rownames_to_column("gene") %>% 
-    mutate(
-        rank_cpm = seq_along(cpm)
-    ) %>% 
-    ggplot(
-        aes(rank_cpm/1e3, log10(cpm))
-    ) + 
-    geom_line() +
-    theme_md_classic()
-```
-
-i'm not sure i might just leave no background
-
-maybe this should be done at the cluster level even and then get a union set
-of expressed genes (so not using the class-level...)
-
 # MSN Group eRegulon comparisons
 
 For the flagship paper, call eRegulons active in (any) MSN groups, and then
@@ -5858,8 +5112,6 @@ invisible(dev.off())
 ```
 
 ## Just look for eRegs where it's highest?
-
-
 
 
 ```{r}
@@ -6142,7 +5394,6 @@ rna_group_mean_cpm_z[, msn_groups] %>% head
 
 
 ```{r, fig.height=6}
-# library(circlize)
 
 regs_keep <- c("NCOA3_direct_+/+", "MITF_direct_+/-")
 
@@ -6307,12 +5558,6 @@ bind_rows(Map(
     theme_md_classic() 
 ```
 
-```{r}
-# ggsave(
-#     file.path(pdir_crac, "cracdl_enr_dsrna_rgnt_scatter.pdf"),
-#     width = 40, height = 50, units = "mm"
-# )
-```
 
 Not working
 
@@ -6538,7 +5783,6 @@ mat <- geneAUC_neur_dir_pp_by_rgnt_z[eregs_cracdl, , drop = FALSE]  # eRegulon x
 #     row.names=NULL
 # )
 
-# v_crac_all <- setNames(df_crac$Enrichment, df_crac$RegionNT)
 v_crac_all <- rna_by_rgnt_cpm["CRACDL", ]
 # > identical(colnames(mat), colnames(rna_by_rgnt_cpm))
 # TRUE
@@ -6752,7 +5996,6 @@ cl_check <- c(
 
 # ok but it's the regulons I want to check
 ```
-
 
 
 ```{r}
@@ -7013,10 +6256,6 @@ p1 <- ggraph(g, layout = "fr") +
         midpoint = 0,
         limits = c(-2, 2),
         oob = scales::squish,
-        # limits = c(
-        #     min(V(g)$score, na.rm = TRUE),
-        #     max(V(g)$score, na.rm = TRUE)
-        # )
     ) +
     scale_size_continuous(
         name = "Gene expression\n(z-score)", 
@@ -7127,10 +6366,6 @@ p2 <- ggraph(g, layout = "fr") +
         midpoint = 0,
         limits = c(-2, 2),
         oob = scales::squish,
-        # limits = c(
-        #     min(V(g)$score, na.rm = TRUE),
-        #     max(V(g)$score, na.rm = TRUE)
-        # )
     ) +
     scale_size_continuous(
         name = "Gene expression\n(z-score)", 
@@ -7244,9 +6479,6 @@ for (nt in colnames(geneAUC_neur_dir_pp_by_nt_z)) {
         col = col_fun,
         # show_column_names = FALSE,
         column_title = paste(nt, "clusters"),
-        # heatmap_legend_param = list(
-        #     legend_direction = "horizontal"
-        # )
         row_names_gp    = gpar(fontsize = 6, fontfamily = "ArialMT"),
         column_names_gp = gpar(fontsize = 6, fontfamily = "ArialMT"),
         heatmap_legend_param = list(
@@ -7279,9 +6511,6 @@ ht <- Heatmap(
     col = col_fun,
     # show_column_names = FALSE,
     column_title = "GABA clusters",
-    # heatmap_legend_param = list(
-    #     legend_direction = "horizontal"
-    # )
     row_names_gp    = gpar(fontsize = 6, fontfamily = "ArialMT"),
     column_names_gp = gpar(fontsize = 6, fontfamily = "ArialMT"),
     heatmap_legend_param = list(
@@ -7991,14 +7220,6 @@ r=0.8, p<2.2e-16
 [but leaving out of export because of sizing/text formatting annoyance]
 
 ```{r}
-# ggsave(
-#     file.path(pdir_thm_mb_gaba, "scatter_ereg_z_mb_vs_thm_gaba_with_r.pdf"),
-#     width=50, height=50, units = "mm"
-# )
-# ggsave(
-#     file.path(pdir_thm_mb_gaba, "scatter_ereg_z_mb_vs_thm_gaba.pdf"),
-#     width=60, height=50, units = "mm"
-# )
 ggsave(
     file.path(pdir_thm_mb_gaba, "scatter_ereg_z_mb_vs_thm_gaba_BIG.pdf"),
     width=150, height=120, units = "mm"
@@ -8296,7 +7517,6 @@ rbind(ereg_neur_dir, ereg_neur_ext) %>%
 ```
 
 
-
 #### Avg for all 4 MGE GABA groups
 
 ```{r}
@@ -8498,10 +7718,6 @@ for (group_use in mge_gaba_groups) {
             low = "blue", mid = "#EEEEEE", high = "red", # match ComplexHeatmap
             midpoint = 0, 
             limits = c(-4, 4)
-            # limits = c(
-            #     min(V(g)$mean_z, na.rm = TRUE),
-            #     max(V(g)$mean_z, na.rm = TRUE)
-            # )
         ) +
         scale_size_continuous(
             name = "Betweenness", range = c(1, 3)
@@ -8639,10 +7855,6 @@ for (group_use in mge_gaba_groups) {
             low = "blue", mid = "#EEEEEE", high = "red", # match ComplexHeatmap
             midpoint = 0, 
             limits = c(-4, 4)
-            # limits = c(
-            #     min(V(g)$mean_z, na.rm = TRUE),
-            #     max(V(g)$mean_z, na.rm = TRUE)
-            # )
         ) +
         scale_size_continuous(
             name = "Betweenness", range = c(1, 3)
@@ -8818,9 +8030,6 @@ Some of those TFs might not be that expressed or may not be DE.
 
 I'd like to use DESeq2... but in a bit of a hurry
 
-```{r}
-# bind_rows(ereg_neur_dir, ereg_neur_ext)$TF %>% unique %>% sort %>% identical(all_tfs) %>% stopifnot
-```
 
 ```{r}
 rna_by_ge_rgnt_comp_cpm[all_tfs, c("MGE_STR_GABA", "MGE_CTX_GABA")] %>% 
@@ -9195,7 +8404,6 @@ https://pmc.ncbi.nlm.nih.gov/articles/PMC11430182/
 (STR) Neurotrophins & receptors: GDNF, NGFR/p75NTR – motility tuning & trophic support
 
 
-
 (CTX) ECM/glycan editing: SULF1, LTBP1 – HS/sulfation editing & TGF-b matrix control -> cue availability & substrate. 
 
 (CTX) Vascular/angiogenic TFs: ETS1 (±FLI1) – endothelial program links; migration along vessels. 
@@ -9293,7 +8501,6 @@ nodes <- mutate(
 
 ```{r}
 g <- graph_from_data_frame(d = edges, directed = TRUE, vertices = nodes)
-# V(g)$betweenness <- betweenness(g, directed = TRUE, normalized = TRUE)
 V(g)$lfc_ctx_str <- nodes$lfc_ctx_str
 E(g)$dir <- edges$dir
 
@@ -9326,10 +8533,6 @@ p <- ggraph(g, layout = "fr") +
         # limits = c(-9, 3), # the real limits...
         limits = c(-4, 4),
         oob = scales::squish
-        # limits = c(
-        #     min(V(g)$score, na.rm = TRUE),
-        #     max(V(g)$score, na.rm = TRUE)
-        # )
     ) +
     scale_size_continuous(
         name = "Betweenness", range = c(1, 3)
@@ -10194,29 +9397,6 @@ ggsave(
 Also, double-check what kind of read counts we're talking about.
 
 ```{r}
-# lapply(clusts_for_str_ctx_final, function(x) rna_by_cl_raw[, x, drop=FALSE]) %>% 
-#     lapply(rowMeans) %>% 
-#     do.call(cbind, .) %>% 
-#     .[all_tfs, ] %>% 
-#     .[c(
-#         "TCF4",
-#         "KLF5",
-#         "ETS1",
-#         "SATB2",
-#         "RORA",
-#         "LHX6",
-#         "PBX3",
-#         "FOS",
-#         "NKX2-1",
-#         "SOX5",
-#         "MEF2C",
-#         "POU6F2",
-#         "FLI1",
-#         "NFIB",
-#         "NFIX",
-#         "ARID3B",
-#         "LHX8"
-#     ), ]
 
 #        PVALB_CTX    PVALB_STR SST_CTX     SST_STR
 # TCF4      9649.0 12186.538462    6932 6393.000000 ### SST CTX 
@@ -10445,9 +9625,6 @@ go analysis in general would be cool but for the moment...
 maybe subset for my chemo attractant thing
 
 ```{r}
-# cands_str_v_ctx_coenr_regulon_genes %>% 
-#     lapply(intersect, brain_guide_ints$gene) %>% 
-#     .[lengths(.) > 0]
 
 # $PVALB_STR.NFIB.1
 # [1] "SLIT3" "EFNB2"
@@ -10506,7 +9683,6 @@ Maybe this could make for a simple/straightforward kind of small network?
 
 ---> Even ignoring our network, can make a little cartoon, and cheat to use
 the previous discovered repressive role for NKX2-1.
-
 
 
 Otherwise I think you get a lot of TFs...
@@ -10974,7 +10150,6 @@ extended, so maybe I stick to the 9 direct.
 ```
 
 
-
 ```{r}
 edges <- lhx6_net$edges
 nodes <- lhx6_net$nodes
@@ -11203,10 +10378,6 @@ plts_lhx6_net <- lapply(names(clusts_for_str_ctx_final), function(grp) {
             midpoint = 0,
             limits = c(-4, 4),
             oob = scales::squish,
-            # limits = c(
-            #     min(V(g)$score, na.rm = TRUE),
-            #     max(V(g)$score, na.rm = TRUE)
-            # )
         ) +
         scale_size_continuous(
             name = "Gene expression\n(z-score)", 
@@ -11343,10 +10514,6 @@ plts_lhx6_net_diffs <- lapply(c("PVALB", "SST"), function(grp) {
             midpoint = 0,
             limits = c(-2, 2),
             oob = scales::squish,
-            # limits = c(
-            #     min(V(g)$score, na.rm = TRUE),
-            #     max(V(g)$score, na.rm = TRUE)
-            # )
         ) +
         scale_size_continuous(
             name = "Change in Gene Expression in CTX\n(z-score difference)", 
@@ -11677,10 +10844,6 @@ p <- ggraph(g, layout = "fr") +
         midpoint = 0, 
         limits = c(-4, 4),
         oob = scales::squish,
-        # limits = c(
-        #     min(V(g)$mean_z, na.rm = TRUE),
-        #     max(V(g)$mean_z, na.rm = TRUE)
-        # )
     ) +
     scale_size_continuous(
         name = "Betweenness", range = c(1, 3)
@@ -11774,7 +10937,5 @@ ereg_glia_dir %>%
 ereg_neur_dir %>% 
     filter(Gene == "MOXD1")
 ```
-
-
 
 

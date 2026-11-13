@@ -10,23 +10,13 @@ date: "2026-02-23"
 suppressPackageStartupMessages({
     library(dplyr)
     library(ComplexHeatmap)
-    # library(circlize)
-    # library(RColorBrewer)
     library(ggplot2)
     library(patchwork)
     library(ggrepel)
     library(ggpubr)
     library(ggrepel)
-    # library(viridisLite)
     library(grid)
-    # library(igraph)
-    # library(ggraph)
-    # library(scales)
     library(tibble)
-    # library(tidyr)
-    # library(purrr)
-    # library(stringr)
-    # library(GenomicRanges)
 })
 
 theme_md_classic <- function() {
@@ -1080,7 +1070,6 @@ ggsave(
 ```
 
 
-
 Should do that with cluster-level F1 by group instead?
 
 ```{r}
@@ -1344,7 +1333,6 @@ tbl_region %>%
 ```{r}
 pred_accuracy_table_region
 ```
-
 
 
 ## (!) Write out
@@ -1697,7 +1685,6 @@ ggsave(
 ```
 
 
-
 ### Region-level
 
 ```{r}
@@ -1714,13 +1701,6 @@ pred_accuracy_table_region %>%
     scale_x_continuous(limits=c(0,1), expand=c(0,0)) + 
     theme_md_classic() -> p2
 p2
-```
-
-```{r}
-# ggsave(
-#     file.path(pdir_plots, "boxplot_region_precision_recall_f1.pdf"),
-#     width=50, height=25, units = "mm"
-# )
 ```
 
 
@@ -1970,13 +1950,6 @@ pred_accuracy_table_group %>%
     theme_md_classic()
 
 
-# pred_accuracy_table_group %>% 
-#     mutate(conf_flow = n_pred * p_alt1) %>% 
-#     arrange(desc(conf_flow)) %>% 
-#     .[, c("prediction", "n_pred", "n_truth", "precision", "conf_flow")] %>% 
-#     head(10) %>% 
-#     print.data.frame
-
 #               prediction n_pred n_truth precision  conf_flow
 # 1          Oligo PLEKHG1  25970   13235    0.4803 13462.8480
 # 2            STRv D1 MSN  17181   14359    0.7537  3628.6272
@@ -2112,122 +2085,6 @@ ggsave(
 # p_alt3             "1e-04"        
 # Subcortex_Class_v4 "Nonneuron"   
     ```
-
-### (skip) Alluvial plot
-
-“left = truth, right = prediction” alluvial where each truth group has total width = 1,
-
-```{r}
-library(tidyr)
-library(ggalluvial)
-
-make_truth_alluvial_df <- function(
-        tbl_group,
-        pred_accuracy_table_group,
-        n_worst = 25,
-        recall_max = NULL,
-        p_min = 0.05,
-        top_k = NULL,
-        include_self = TRUE,
-        other_label = "Other"
-) {
-    cm <- as.matrix(unclass(tbl_group))
-    storage.mode(cm) <- "numeric"
-    
-    # Column-normalize: P(pred | truth)
-    p_pred_given_truth <- sweep(cm, 2, pmax(colSums(cm), 1), "/")
-    
-    # truth-centered performance table
-    truth_scores <- pred_accuracy_table_group %>%
-        transmute(truth = prediction, recall = recall, n_truth = n_truth) %>%
-        filter(truth %in% colnames(p_pred_given_truth)) %>%
-        filter(!is.na(recall), n_truth > 0)
-    
-    truth_keep <- if (!is.null(recall_max)) {
-        truth_scores %>% filter(recall <= recall_max) %>% arrange(recall) %>% pull(truth)
-    } else {
-        truth_scores %>% arrange(recall) %>% slice_head(n = n_worst) %>% pull(truth)
-    }
-    
-    # Long format probs for selected truth groups
-    df <- as.data.frame(as.table(p_pred_given_truth[, truth_keep, drop = FALSE]), stringsAsFactors = FALSE)
-    colnames(df) <- c("pred", "truth", "p")
-    
-    # add class annotation (for fill, etc.)
-    df <- df %>%
-        left_join(
-            pred_accuracy_table_group %>% select(prediction, Subcortex_Class_v4),
-            by = c("truth" = "prediction")
-        )
-    
-    df2 <- df %>%
-        group_by(truth) %>%
-        mutate(
-            is_self = (pred == truth),
-            rank_p = dplyr::min_rank(dplyr::desc(p)),
-            topk_keep = if (is.null(top_k)) FALSE else (rank_p <= top_k),
-            keep =
-                (include_self & is_self) |
-                (!is_self & (p >= p_min)) |
-                (!is_self & topk_keep),
-            pred2 = ifelse(keep, pred, other_label)
-        ) %>%
-        group_by(truth, pred2, Subcortex_Class_v4) %>%
-        summarise(p = sum(p), .groups = "drop")
-    
-    # Order truth groups by recall (worst first)
-    truth_order <- truth_scores %>%
-        filter(truth %in% truth_keep) %>%
-        arrange(recall) %>%
-        pull(truth)
-    
-    df2 %>%
-        mutate(
-            truth = factor(truth, levels = truth_order),
-            pred2 = factor(pred2, levels = c(setdiff(unique(pred2), other_label), other_label))
-        )
-}
-```
-
-```{r}
-df_alluv <- make_truth_alluvial_df(
-    tbl_group = tbl_group,
-    pred_accuracy_table_group = pred_accuracy_table_group,
-    n_worst = 25,
-    p_min = 0.05,
-    include_self = TRUE,
-    other_label = "Other"
-)
-```
-
-
-```{r}
-df_alluv %>% 
-    filter(p>0.1) %>% 
-    ggplot(aes(axis1 = truth, axis2 = pred2, y = p)) +
-    geom_alluvium(aes(fill = Subcortex_Class_v4), alpha = 0.85, width = 0.25) +
-    geom_stratum(width = 0.25, color = "black", linewidth = 0.2, fill = "white") +
-    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 2.6) +
-    scale_fill_manual(values = palettes$Class) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-    labs(x = NULL, y = "Fraction within truth group", fill = "Class") +
-    theme_md_classic() + 
-    theme(
-        axis.line = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text = element_blank()
-    )
-```
-
-forget that it's terrible
-
-```{r}
-pred_accuracy_table %>% filter(prediction %in% c("cluster_807", "cluster_808", "cluster_794"))
-```
-
-```{r}
-pred_accuracy_table %>% filter(prediction %in% c("cluster_681", "cluster_684"))
-```
 
 ## [skip] (Use graphs) 
 
@@ -2570,7 +2427,6 @@ pairs_group <- pair_confusions_from_tbl(tbl_group)
 
 ```{r}
 
-# library(scales)
 
 pairs_group %>%
     filter(n_pair >= 50, truth_pair >= 500) %>%  # important: avoid tiny-denominator artifacts
@@ -2661,12 +2517,6 @@ Try to optimize labelling, colorbar size
 ```{r}
 # thanks gpt for going nuts on plot code
 
-# library(dplyr)
-# library(ggplot2)
-# library(scales)
-# library(ggrepel)
-# library(tibble)
-# library(grid)
 
 # ---- choose labels you *must* include (exact group names) ----
 must_label_pairs <- tibble::tribble(
@@ -2755,8 +2605,6 @@ ggsave(
 Those (labelled) swap pairs explain what fraction of group misassignments?
 
 ```{r}
-# library(dplyr)
-# library(tibble)
 
 cm <- as.matrix(unclass(tbl_group))
 storage.mode(cm) <- "numeric"
@@ -3187,8 +3035,6 @@ ggsave(
 ```
 
 
-
-
 # Neurons vs. non-neurons (re: reviewer)
 
 I guess first point is distinguished neuron from non-neuron is not being
@@ -3341,8 +3187,5 @@ pred_accuracy_table %>%
 pred_accuracy_table %>% 
     filter(prediction=="cluster_55")
 ```
-
-
-
 
 

@@ -10,22 +10,10 @@ date: "2026-02-20"
 suppressPackageStartupMessages({
     library(dplyr)
     library(ComplexHeatmap)
-    # library(circlize)
-    # library(RColorBrewer)
     library(ggplot2)
     library(patchwork)
     library(ggrepel)
     library(ggpubr)
-    # library(viridisLite)
-    # library(grid)
-    # library(igraph)
-    # library(ggraph)
-    # library(scales)
-    # library(tibble)
-    # library(tidyr)
-    # library(purrr)
-    # library(stringr)
-    # library(GenomicRanges)
 })
 
 theme_md_classic <- function() {
@@ -671,121 +659,6 @@ df_gsets_gexp_dist_by_group %>%
 
 
 #### Mantel tests?
-
-
-
-### (skip) Focus in on only the closest distances?
-
-```{r}
-df_gsets_gexp_dist %>% 
-    filter(
-        rank(HVGs) < 5e4 #| rank(panel) < 1e5
-    ) %>% 
-    ggplot(aes(HVGs, panel)) +
-    geom_hex() + 
-    scale_fill_viridis_c(trans="log10") + 
-    geom_smooth(method="lm") + 
-    ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
-    labs(
-        title = "Cluster Pairwise Distances by Gene Set:\nClosest Cluster Pairs Only",
-        x = "4k HVGs",
-        y = "300 Spatial Panel Genes",
-        fill = "clusters"
-    ) + 
-    theme_md_bw()
-```
-
-doesn't make it look better....
-
-
-## [SKIP] in PCA space?
-
-### single pca space
-
-single PCA space for all clusters, which i guess is fine...
-
-```{r}
-# multi_mats_for_sets %>% 
-#     lapply(log1p) %>% 
-#     lapply(scale_rows) %>% 
-#     lapply(prcomp) ->
-#     multi_mats_for_sets_pca
-# 
-# multi_mats_for_sets_pca %>% 
-#     lapply("[[", "rotation") %>% 
-#     lapply(. %>% .[, 1:20]) %>% # top 20 PCs
-#     lapply(dist) ->
-#     multi_mats_for_sets_dists_pca
-# 
-# multi_mats_for_sets_dists_pca %>% 
-#     lapply(as.vector) %>% 
-#     do.call(cbind, .) %>% 
-#     as.data.frame %>% 
-#     setNames(c("HVGs", "panel")) ->
-#     df_gsets_pca_dist
-```
-
-```{r}
-# ggplot(df_gsets_pca_dist, aes(HVGs, panel)) +
-#     geom_hex() + 
-#     scale_fill_viridis_c(trans="log10") + 
-#     geom_smooth(method="lm") + 
-#     ggpubr::stat_cor() + 
-#     theme_md_classic()
-```
-
-### do fully separated
-
-```{r}
-# obs %>% 
-#     tibble::rownames_to_column("cluster") %>% 
-#     (function(df) {
-#         glia <- filter(df, Subcortex_Class_v4=="Nonneuron")
-#         neur <- filter(df, Subcortex_Class_v4!="Nonneuron")
-#         c(
-#             split(neur$cluster, neur$Subcortex_Class_v4),
-#             split(glia$cluster, glia$Subcortex_Group_v4)
-#         )
-#     }) %>% 
-#     .[lengths(.)>1] %>% 
-#     lapply(function(cl) {
-#         multi_mats_for_sets %>% 
-#             # subset after z-scoring...?
-#             lapply(log1p) %>% 
-#             lapply(scale_rows) %>% 
-#             lapply(function(x) x[, cl]) %>% 
-#             lapply(prcomp) %>%
-#             lapply("[[", "rotation") %>%
-#             lapply(function(x) x[, 1:min(20, ncol(x))]) %>% # cap at 20 PCs
-#             lapply(dist) %>%
-#             lapply(as.vector) %>%
-#             do.call(cbind, .) %>%
-#             as.data.frame %>%
-#             setNames(c("HVGs", "panel"))
-#     }) %>% 
-#     # identity -> tmp
-#     Map(function(x, nm) mutate(x, grouping = nm), ., names(.)) %>%
-#     unname %>%
-#     do.call(rbind, .) ->
-#     df_gsets_pca_dist_by_neurclass_gliagroup
-```
-
-```{r}
-# df_gsets_pca_dist_by_neurclass_gliagroup %>% 
-#     ggplot(aes(HVGs, panel)) +
-#     facet_wrap(~grouping, scales="free") + 
-#     geom_hex() + 
-#     scale_fill_viridis_c(trans="log10") + 
-#     geom_smooth(method="lm") + 
-#     ggpubr::stat_cor(aes(label = after_stat(r.label))) + 
-#     labs(
-#         title = "Cluster Pairwise Distances by Gene Set\n(Euclidian distance in PCA space)",
-#         x = "4k HVGs",
-#         y = "300 Spatial Panel Genes",
-#         fill = "clusters"
-#     ) + 
-#     theme_md_bw()
-```
 
 
 # Check on panel gene variance
@@ -1875,11 +1748,6 @@ but just generally what is the fraction
 
 ~94% of assigned clusters match their group
 
-```{r}
-# df_metacell_sim %>%
-#     mutate(group_match = query_group == top_hit_group) %>%
-#     (function(x) round(sum(x$namesake_rank==1) / nrow(x), 2))
-```
 
 ~71% of clusters match their cluster
 
