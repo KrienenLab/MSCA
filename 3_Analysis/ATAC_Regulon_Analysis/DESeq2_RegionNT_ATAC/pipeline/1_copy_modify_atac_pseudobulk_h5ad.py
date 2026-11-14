@@ -17,7 +17,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-pdir            = Path("/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/DESeq2_RegionNT_ATAC")
+repo            = Path(__file__).resolve().parents[4]  # root of this repository
+pdir            = Path(repo, "3_Analysis/ATAC_Regulon_Analysis/DESeq2_RegionNT_ATAC")
 pdir_dat        = Path("/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster")
 dir_count_mat   = Path(pdir_dat, "data/atac/atac_count_matrix")
 path_cl_by_pk   = Path(dir_count_mat, "Cluster_v4_by_462k_peaks.h5ad")

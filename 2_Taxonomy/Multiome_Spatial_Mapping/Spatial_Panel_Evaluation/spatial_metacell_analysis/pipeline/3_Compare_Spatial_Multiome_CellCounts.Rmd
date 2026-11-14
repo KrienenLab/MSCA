@@ -59,7 +59,8 @@ theme_md_bw <- function() {
 # Paths
 
 ```{r}
-pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir <- file.path(repo, "2_Taxonomy/Multiome_Spatial_Mapping/Spatial_Panel_Evaluation")
 outdir <- file.path(pdir, "spatial_metacell_analysis")
 
 pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"

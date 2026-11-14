@@ -16,7 +16,8 @@ suppressPackageStartupMessages({
     library(AUCell)
 })
 
-pdir   <- "/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir   <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis")
 outdir <- file.path(pdir, "AUCell/data")
 
 if (!dir.exists(outdir))
@@ -54,7 +55,7 @@ rownames(mat_atac) <- rnames
 # Import eRegulons --------------------------------------------------------
 
 ereg_dir <- read.delim(
-    "/jukebox/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulon_direct.tsv"
+    file.path(repo, "3_Analysis/HPF_Gradient_Analysis/data/eRegulon_direct.tsv")
 )
 ereg_ext <- read.delim(
     "/jukebox/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulons_extended.tsv"

@@ -2,9 +2,8 @@
 
 Analysis and plotting code for Figure S2: how well the 300-gene Xenium panel resolves the multiome taxonomy.
 The notebooks were run interactively and are published as run; they include exploratory analyses that are
-not in the paper. Paths are absolute: they start with `/jukebox/krienen` (the lab volume on the cluster) or
-`/Volumes/krienen` (the same volume mounted on a laptop), and `lab_members/mike/260216_Spatial_Panel_Eval` in
-a path is this directory.
+not in the paper.
+Paths to files in this repository are built from the repository root (`here::here()` in R, `git rev-parse --show-toplevel` in shell), so run the code from inside a clone. Large inputs that are not in the repository keep the path they had on the lab volume (`/jukebox/krienen` on the cluster, `/Volumes/krienen` on a laptop); point those at your copies.
 
 ## Figure panel to code
 
@@ -12,18 +11,18 @@ Final panels were edited in Illustrator (labels and legends).
 
 | Panel | Output file | Code |
 | --- | --- | --- |
-| S2A | `spatial_metacell_analysis/plots/panel_vs_hvg_gene_expression_percentile[2].pdf`, `panel_vs_hvg_gene_variance_percentile[2].pdf` | `spatial_metacell_analysis/pipeline/2_Verify_Spatial_Metacells.Rmd` lines 806-885, "Check on panel gene variance" |
-| S2B | `spatial_metacell_analysis/plots/scatter_genesets_cl_pairwise_gexp_dist_all_cl.pdf` | same notebook, line 317 |
-| S2C | `mmc_multiome_selfmapping/plots/boxplot_region_precision_recall_f1.pdf` | `mmc_multiome_selfmapping/pipeline/1_Analyze_MMC_SelfMapping_Results.Rmd` line 1729 |
-| S2D | `.../scatter_set_size_vs_avg_cluster_f1score.pdf` | same notebook, line 849 |
-| S2E | `.../scatter_group_f1_4khvgs_vs_panel[2].pdf` | lines 1018-1066 |
-| S2F | `random_forest_classifier/union_4k_hvgs_spatial_panel/plots/boxplot_rank_pct_importance_hvgs-vs-panel[2].pdf` | `random_forest_classifier/RF_FeatureImportancePlots.Rmd` lines 108-115 |
-| S2G | `.../boxplot_cluster_and_group_precision_recall_f1[_flip].pdf` | `1_Analyze_MMC_SelfMapping_Results.Rmd` lines 1538-1562 |
-| S2H | `.../boxplot_group_f1_by_class.pdf` | line 1681 |
-| S2I | `.../scatter_precision_vs_palt1_confusion_mapping[2].pdf` | lines 2025-2061 |
-| S2J | `.../rankscatter_avg_cluster_f1_by_group.pdf` | line 2778 |
-| S2K | `spatial_metacell_analysis/plots/cell_abundance_comparisons_neuron_classes_regline.pdf` | `spatial_metacell_analysis/pipeline/3_Compare_Spatial_Multiome_CellCounts.Rmd` line 360 |
-| S2L | `spatial_metacell_analysis/plots/cell_abundance_comparisons.pdf` | same notebook, line 263 |
+| S2A | `spatial_metacell_analysis/plots/panel_vs_hvg_gene_expression_percentile[2].pdf`, `panel_vs_hvg_gene_variance_percentile[2].pdf` | `spatial_metacell_analysis/pipeline/2_Verify_Spatial_Metacells.Rmd` lines 807-886, "Check on panel gene variance" |
+| S2B | `spatial_metacell_analysis/plots/scatter_genesets_cl_pairwise_gexp_dist_all_cl.pdf` | same notebook, line 318 |
+| S2C | `mmc_multiome_selfmapping/plots/boxplot_region_precision_recall_f1.pdf` | `mmc_multiome_selfmapping/pipeline/1_Analyze_MMC_SelfMapping_Results.Rmd` line 1730 |
+| S2D | `.../scatter_set_size_vs_avg_cluster_f1score.pdf` | same notebook, line 850 |
+| S2E | `.../scatter_group_f1_4khvgs_vs_panel[2].pdf` | lines 1019-1067 |
+| S2F | `random_forest_classifier/union_4k_hvgs_spatial_panel/plots/boxplot_rank_pct_importance_hvgs-vs-panel[2].pdf` | `random_forest_classifier/RF_FeatureImportancePlots.Rmd` lines 109-116 |
+| S2G | `.../boxplot_cluster_and_group_precision_recall_f1[_flip].pdf` | `1_Analyze_MMC_SelfMapping_Results.Rmd` lines 1539-1563 |
+| S2H | `.../boxplot_group_f1_by_class.pdf` | line 1682 |
+| S2I | `.../scatter_precision_vs_palt1_confusion_mapping[2].pdf` | lines 2026-2062 |
+| S2J | `.../rankscatter_avg_cluster_f1_by_group.pdf` | line 2779 |
+| S2K | `spatial_metacell_analysis/plots/cell_abundance_comparisons_neuron_classes_regline.pdf` | `spatial_metacell_analysis/pipeline/3_Compare_Spatial_Multiome_CellCounts.Rmd` line 361 |
+| S2L | `spatial_metacell_analysis/plots/cell_abundance_comparisons.pdf` | same notebook, line 264 |
 
 ## Upstream steps
 
@@ -37,8 +36,8 @@ Final panels were edited in Illustrator (labels and legends).
 
 | File | What it is |
 | --- | --- |
-| `mmc_multiome_selfmapping/data/MapMyCells_selfmapping_accuracy_by_{Cluster,Group,Region}.csv` | Precision, recall and F1 from the self-mapping, written by `1_Analyze_MMC_SelfMapping_Results.Rmd` lines 1341-1353. |
-| `mmc_multiome_selfmapping/data/MapMyCells_selfmapping_truthtable_by_Group.csv` | True vs. predicted Group counts (line 1368). The Cluster-level table (6 MB) is not included. |
+| `mmc_multiome_selfmapping/data/MapMyCells_selfmapping_accuracy_by_{Cluster,Group,Region}.csv` | Precision, recall and F1 from the self-mapping, written by `1_Analyze_MMC_SelfMapping_Results.Rmd` lines 1342-1354. |
+| `mmc_multiome_selfmapping/data/MapMyCells_selfmapping_truthtable_by_Group.csv` | True vs. predicted Group counts (line 1369). The Cluster-level table (6 MB) is not included. |
 | `random_forest_classifier/union_4k_hvgs_spatial_panel/feature_importances_4104__1000_trees.csv` | Input to S2F. |
 | `spatial_metacell_analysis/data/spatial_Cluster_v4_stats.csv` | Spatial cell counts per cluster; input to S2K-L. |
 
@@ -58,7 +57,7 @@ Final panels were edited in Illustrator (labels and legends).
 ## Gene sets
 
 The self-mapping notebook reads five gene lists from the folder `pdir_sets` to get the set sizes plotted
-on the x-axis of S2D. A copy of that folder is in `mmc_multiome_selfmapping/data/gene_sets/`. The marker genes
+on the x-axis of S2D. That folder is `mmc_multiome_selfmapping/data/gene_sets/`. The marker genes
 MapMyCells actually used for each run are in
 `self_mapping_MMC_output/<gene set>/query_markers_dispatch_*.json`.
 

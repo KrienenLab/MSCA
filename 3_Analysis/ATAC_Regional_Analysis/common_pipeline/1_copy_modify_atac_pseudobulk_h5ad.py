@@ -16,7 +16,8 @@ import anndata as ad
 import pandas as pd
 from pathlib import Path
 
-pdir          = Path("/jukebox/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC")
+repo          = Path(__file__).resolve().parents[3]  # root of this repository
+pdir          = Path(repo, "3_Analysis/ATAC_Regional_Analysis")
 pdir_dat      = Path("/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster")
 dir_count_mat = Path(pdir_dat, "data/atac/atac_count_matrix")
 path_cl_by_pk = Path(dir_count_mat, "Cluster_v4_by_462k_peaks.h5ad")

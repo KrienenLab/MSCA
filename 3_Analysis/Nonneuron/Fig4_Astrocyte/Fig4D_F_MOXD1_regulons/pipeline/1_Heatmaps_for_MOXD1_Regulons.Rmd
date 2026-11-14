@@ -58,7 +58,8 @@ theme_md_classic <- function() {
 # Paths
 
 ```{r}
-pdir <- "/Volumes/krienen/lab_members/mike/260303_MOXD1_Analysis"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir <- file.path(repo, "3_Analysis/Nonneuron/Fig4_Astrocyte/Fig4D_F_MOXD1_regulons")
 
 pdir_plots <- file.path(pdir, "plots")
 if (!dir.exists(pdir_plots))
@@ -69,17 +70,17 @@ pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_reclus
 
 ```{r}
 # multiome rna pseudobulk/metacell matrix
-path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_genes_matrix.csv"
+path_rna_by_cl_raw <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis/common_data/Cluster_v4_by_genes_matrix.csv")
 
 # multiome atac 
-path_atac_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_462k_peaks_matrix.csv"
+path_atac_by_cl_raw <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis/common_data/Cluster_v4_by_462k_peaks_matrix.csv")
 
 path_obs <- file.path(pdir_meta, "revision/subcortex_anno_table_updated_clean_20260218.csv")
 
 path_palettes <- file.path(pdir_meta, "revision/color_palette.csv")
 
 # metacell AUCell scores
-pdir_auc <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/AUCell/data"
+pdir_auc <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis/AUCell/data")
 path_rna_auc  <- file.path(pdir_auc, "score_rna_auc.csv")
 path_atac_auc <- file.path(pdir_auc, "score_atac_auc.csv")
 
@@ -144,7 +145,7 @@ dim(atac_by_cl_raw)
 ```{r}
 # direct (used almost exclusively)
 ereg_neur_dir <- read.delim(
-    "/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulon_direct.tsv"
+    file.path(repo, "3_Analysis/HPF_Gradient_Analysis/data/eRegulon_direct.tsv")
 )
 # extended (checked in some cases)
 ereg_neur_ext <- read.delim(

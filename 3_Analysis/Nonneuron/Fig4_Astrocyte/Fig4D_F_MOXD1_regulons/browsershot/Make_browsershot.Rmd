@@ -16,7 +16,8 @@ suppressPackageStartupMessages({
 ```
 
 ```{r}
-pdir     <- "/Volumes/krienen/lab_members/mike/260303_MOXD1_Analysis/browsershot"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir     <- file.path(repo, "3_Analysis/Nonneuron/Fig4_Astrocyte/Fig4D_F_MOXD1_regulons/browsershot")
 pdir_dat <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster"
 pdir_bw  <- file.path(pdir_dat, "data/atac/bw")
 

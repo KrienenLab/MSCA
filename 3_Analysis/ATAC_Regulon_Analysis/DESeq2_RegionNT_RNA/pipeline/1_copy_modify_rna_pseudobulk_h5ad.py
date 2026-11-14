@@ -17,7 +17,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-pdir            = Path("/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/DESeq2_RegionNT_RNA")
+repo            = Path(__file__).resolve().parents[4]  # root of this repository
+pdir            = Path(repo, "3_Analysis/ATAC_Regulon_Analysis/DESeq2_RegionNT_RNA")
 pdir_dat        = Path("/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster")
 path_cl_by_gn   = Path(pdir_dat, "data/rna/metacell_v2/subcortex/Cluster_v4_metacell.h5ad")
 path_anno_tbl   = Path(pdir_dat, "metadata/preprint_freeze/subcortex_anno_table_preprint.csv")

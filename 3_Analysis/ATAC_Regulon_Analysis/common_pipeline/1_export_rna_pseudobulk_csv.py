@@ -4,7 +4,8 @@ import anndata as ad
 import pandas as pd
 from pathlib import Path
 
-pdir          = Path("/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC")
+repo          = Path(__file__).resolve().parents[3]  # root of this repository
+pdir          = Path(repo, "3_Analysis/ATAC_Regulon_Analysis")
 pdir_dat      = Path("/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster")
 path_cl_by_gn = Path(pdir_dat, "data/rna/metacell_v2/subcortex/Cluster_v4_metacell.h5ad")
 outdir        = Path(pdir, "common_data")

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-PDIR="/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/DESeq2_RegionNT_ATAC"
+REPO="$(git rev-parse --show-toplevel)"  # root of this repository (run from anywhere inside it)
+PDIR="${REPO}/3_Analysis/ATAC_Regulon_Analysis/DESeq2_RegionNT_ATAC"
 BATCH="${PDIR}/pipeline/batchscript_region_nt_deseq2.sh"
 REGION_NT_SET="${PDIR}/data/all_region_nt.txt"
 LOGDIR="${PDIR}/DESeq2_logs"
