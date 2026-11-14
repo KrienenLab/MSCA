@@ -134,7 +134,8 @@ f1_per_class <- function(pred, truth) {
 ## Paths/imports
 
 ```{r}
-pdir <- "/Volumes/krienen/lab_members/mike/260216_Spatial_Panel_Eval"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir <- file.path(repo, "2_Taxonomy/Multiome_Spatial_Mapping/Spatial_Panel_Evaluation")
 outdir <- file.path(pdir, "mmc_multiome_selfmapping")
 
 pdir_meta <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/metadata"
@@ -171,7 +172,7 @@ path_group_nsfor <- file.path(pdir_meta, "preprint_freeze/taxonomy_group_class_p
 path_clust_nsfor <- file.path(pdir_meta, "preprint_freeze/supp_table/S2_Cluster_Info.csv")
 
 # multiome rna pseudobulk/metacell matrix
-# path_rna_by_cl_raw <- "/Volumes/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/common_data/Cluster_v4_by_genes_matrix.csv"
+# path_rna_by_cl_raw <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis/common_data/Cluster_v4_by_genes_matrix.csv")
 
 # spatial pseudobulk/metacell matrix
 # path_spatial_by_cl_raw <- file.path(outdir, 'data/spatial_pseudobulk_Cluster_v4.csv')
@@ -182,7 +183,7 @@ path_clust_nsfor <- file.path(pdir_meta, "preprint_freeze/supp_table/S2_Cluster_
 path_spatial_panel <- '/Volumes/krienen/lab_members/daisy/hmba/xenium_genes_2024.csv'
 
 # genes in some other sets
-pdir_sets <- "/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets"
+pdir_sets <- file.path(repo, "2_Taxonomy/Multiome_Spatial_Mapping/Spatial_Panel_Evaluation/mmc_multiome_selfmapping/data/gene_sets")
 path_clust_nsf <- file.path(pdir_sets, "Cluster_NSForest_Markers_Gene_List.txt")
 path_group_nsf <- file.path(pdir_sets, "Group_NSForest_Markers_Gene_List.txt")
 path_hvgs      <- "/Volumes/krienen/marm_hmba_integration/250602_reprocess_and_recluster/data/rna/preprint_freeze/RNA_HVG_4K_preprint_freeze.csv"

@@ -10,6 +10,7 @@ library(dplyr)
 ```
 
 ```{r}
+repo <- here::here()  # root of this repository (run from anywhere inside it)
 path_abc <- '/Volumes/krienen/atlases/allen-brain-cell-atlas/'
 pth_tax <- file.path(path_abc, 'metadata/WMB-taxonomy/20231215/cl.df_CCN202307220.xlsx')
 pth_gn  <- file.path(path_abc, 'metadata/WMB-10X/20231215/gene.csv')
@@ -61,14 +62,14 @@ a coincidental overlap of a taxonomy name and a gene name)
 ```{r}
 write(
     abc_tax_genes, 
-    '/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets/abc_wmb_tax_genes/abc_tax_genes.txt'
+    file.path(repo, "2_Taxonomy/Multiome_Spatial_Mapping/Spatial_Panel_Evaluation/mmc_multiome_selfmapping/data/gene_sets/abc_wmb_tax_genes/abc_tax_genes.txt")
 )
 ```
 
 ```{r}
 write(
     unique(mf$vizgen_gene), 
-    '/Users/mike/Princeton Dropbox/Michael DeBerardine/DanTurner_MSA_figures/misc/gene_sets/abc_wmb_tax_genes/abc_merfish_genes.txt'
+    file.path(repo, "2_Taxonomy/Multiome_Spatial_Mapping/Spatial_Panel_Evaluation/mmc_multiome_selfmapping/data/gene_sets/abc_wmb_tax_genes/abc_merfish_genes.txt")
 )
 ```
 

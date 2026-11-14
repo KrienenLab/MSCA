@@ -21,7 +21,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-pdir            = Path("/jukebox/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC")
+repo            = Path(__file__).resolve().parents[4]  # root of this repository
+pdir            = Path(repo, "3_Analysis/ATAC_Regional_Analysis")
 path_h5ad       = Path(pdir, "common_data/Cluster_v4_by_genes_modcopy.h5ad")
 out_list_reg_nt = Path(pdir, "DESeq2_AllRegionNT_RNA/data/all_region_nt.txt")
 

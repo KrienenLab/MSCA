@@ -16,7 +16,8 @@ suppressPackageStartupMessages({
     library(AUCell)
 })
 
-pdir   <- "/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir   <- file.path(repo, "3_Analysis/ATAC_Regulon_Analysis")
 outdir <- file.path(pdir, "AUCell/data")
 
 if (!dir.exists(outdir))

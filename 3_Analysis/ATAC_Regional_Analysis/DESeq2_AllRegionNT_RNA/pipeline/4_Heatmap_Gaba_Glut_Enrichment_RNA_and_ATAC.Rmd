@@ -39,8 +39,9 @@ theme_md_classic <- function() {
 ```
 
 ```{r}
-pdir_rna  <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT_RNA"
-pdir_atac <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir_rna  <- file.path(repo, "3_Analysis/ATAC_Regional_Analysis/DESeq2_AllRegionNT_RNA")
+pdir_atac <- file.path(repo, "3_Analysis/ATAC_Regional_Analysis/DESeq2_AllRegionNT")
 ```
 
 ## Import previous co-enrichment analyses
@@ -73,7 +74,7 @@ names(dsres_atac) <- dir(dir_dsres_atac)
 ## Import eRegulons
 
 ```{r}
-ereg_dir <- read.delim("/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulon_direct.tsv")
+ereg_dir <- read.delim(file.path(repo, "3_Analysis/HPF_Gradient_Analysis/data/eRegulon_direct.tsv"))
 ereg_ext <- read.delim("/Volumes/krienen/lab_members/victor/marm_hmba_atac_50k/scplus_neuron/outs/eRegulons_extended.tsv")
 ```
 
@@ -937,7 +938,7 @@ Median 2 genes per peak (mean 2.8(.))
 # Mine for examples of same gene, different peak
 
 ```{r}
-pdir_mine <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/mine_ereg_region_nt"
+pdir_mine <- file.path(repo, "3_Analysis/ATAC_Regional_Analysis/mine_ereg_region_nt")
 ```
 
 

@@ -33,7 +33,8 @@ theme_md_classic <- function() {
 ```
 
 ```{r}
-pdir <- "/Volumes/krienen/lab_members/mike/251007_HMBA_Spatial_ATAC/DESeq2_AllRegionNT"
+repo <- here::here()  # root of this repository (run from anywhere inside it)
+pdir <- file.path(repo, "3_Analysis/ATAC_Regional_Analysis/DESeq2_AllRegionNT")
 dir_dsres <- file.path(pdir, "DESeq2_results")
 ```
 

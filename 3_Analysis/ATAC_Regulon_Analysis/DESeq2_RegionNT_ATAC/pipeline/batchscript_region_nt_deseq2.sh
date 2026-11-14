@@ -9,9 +9,10 @@
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate /jukebox/scratch/md6347/envs/r4.4
 
-PATH_SCRIPT=/jukebox/krienen/marm_hmba_integration/250602_reprocess_and_recluster/analysis/code/util/RunDESeq2apeglm_bulked_h5ad.R
-PATH_H5AD=/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/DESeq2_RegionNT_ATAC/data/Cluster_v4_by_peaks_modcopy.h5ad
-PATH_OUT=/jukebox/krienen/lab_members/mike/251022_HMBA_Spatial_ATAC/DESeq2_RegionNT_ATAC/DESeq2_results
+REPO="$(git rev-parse --show-toplevel)"  # root of this repository (run from anywhere inside it)
+PATH_SCRIPT="${REPO}/3_Analysis/Nonneuron/FigS5H_microglia_DEG/RunDESeq2apeglm_bulked_h5ad.R"
+PATH_H5AD="${REPO}/3_Analysis/ATAC_Regulon_Analysis/DESeq2_RegionNT_ATAC/data/Cluster_v4_by_peaks_modcopy.h5ad"
+PATH_OUT="${REPO}/3_Analysis/ATAC_Regulon_Analysis/DESeq2_RegionNT_ATAC/DESeq2_results"
 REGION=$1
 NT=$2
 
@@ -22,7 +23,7 @@ NT=$2
 # <out_dir> 
 # [counts_layer]
 
-Rscript $PATH_SCRIPT $PATH_H5AD \
+Rscript "$PATH_SCRIPT" "$PATH_H5AD" \
 "${REGION}_vs_OtherNeur" \
 "${REGION}_${NT}" \
 "OtherNeur" \

@@ -14,9 +14,10 @@ The eRegulon analyses are in [`../ATAC_Regulon_Analysis`](../ATAC_Regulon_Analys
 - The code is published as it was run. It is not a pipeline that runs end to end: the scripts were run once
   each and the notebooks were run interactively. The notebooks include exploratory analyses that are not in
   the paper.
-- Paths are absolute. They start with `/jukebox/krienen` (the lab volume on the cluster) or `/Volumes/krienen`
-  (the same volume mounted on a laptop). `lab_members/mike/251007_HMBA_Spatial_ATAC` in a path is this
-  directory.
+- Paths to files in this repository are built from the repository root: `here::here()` in R (the `here`
+  package), `Path(__file__)` in Python and `git rev-parse --show-toplevel` in shell, so run the code from
+  inside a clone. Large inputs that are not in the repository (see "Inputs") keep the path they had on the
+  lab volume, `/jukebox/krienen` on the cluster or `/Volumes/krienen` on a laptop; point those at your copies.
 - Final figure panels were edited in Illustrator.
 
 ## Layout
@@ -41,9 +42,9 @@ RegionalPeaksBySpecificity/    regional marker peaks
 | 5 | `RegionalPeaksBySpecificity/pipeline/1_Find_Peaks_By_Specificity.Rmd` | Defines regional marker peaks by specificity, and exports the per-cluster score of a midbrain peak set. |
 | 6 | `RegionalPeaksBySpecificity/pipeline/2_RegionalMarkerPeaks.Rmd` | Defines the regional marker peaks again with the later annotation table and draws the heatmap in Figures 7C and S16G. |
 
-Step 2 calls `RunDESeq2apeglm_bulked_h5ad.R`. A copy of that script is in this repository at
-`3_Analysis/Nonneuron/FigS5H_microglia_DEG/RunDESeq2apeglm_bulked_h5ad.R`. The jobs here ran an earlier
-version of it that took a single numerator group and a single denominator group.
+Step 2 calls `RunDESeq2apeglm_bulked_h5ad.R` from `3_Analysis/Nonneuron/FigS5H_microglia_DEG/`. The jobs here ran an
+earlier version of that script, which took a single numerator group and a single denominator group; the call
+is the same.
 
 `2_RegionalMarkerPeaks.Rmd` has no imports of its own. It was run in the same R session as
 `../ATAC_Regulon_Analysis/combined_analysis/notebooks/1_combined_analysis.Rmd`, after that notebook's Env,
@@ -54,10 +55,10 @@ Paths, Utilities and Imports sections, and it writes its plots under that notebo
 
 | Panel | Output file | Code |
 | --- | --- | --- |
-| S7E | `DESeq2_AllRegionNT_RNA/Gaba-Glut_CoEnrichment/enr_rna_vs_enr_atac_gaba_glut_only.pdf` | `DESeq2_AllRegionNT_RNA/pipeline/4_Heatmap_Gaba_Glut_Enrichment_RNA_and_ATAC.Rmd` line 535 |
+| S7E | `DESeq2_AllRegionNT_RNA/Gaba-Glut_CoEnrichment/enr_rna_vs_enr_atac_gaba_glut_only.pdf` | `DESeq2_AllRegionNT_RNA/pipeline/4_Heatmap_Gaba_Glut_Enrichment_RNA_and_ATAC.Rmd` line 536 |
 | 7C | MB and THM blocks of `RegionalPeaksBySpecificity/heatmap_top40_by_combined_rank_dropOlfC.pdf` | `RegionalPeaksBySpecificity/pipeline/2_RegionalMarkerPeaks.Rmd` line 715 |
 | S16G | `RegionalPeaksBySpecificity/heatmap_top40_by_combined_rank_dropOlfC.pdf` (all regions) | same |
-| 7D, 7E | spatial plots made by a co-author | per-cluster PC1 score of a midbrain peak set, `RegionalPeaksBySpecificity/data/MB_peaks_in_THM_clusters_cl_eigen.csv`, written by `RegionalPeaksBySpecificity/pipeline/1_Find_Peaks_By_Specificity.Rmd` line 1435 |
+| 7D, 7E | spatial plots made by a co-author | per-cluster PC1 score of a midbrain peak set, `RegionalPeaksBySpecificity/data/MB_peaks_in_THM_clusters_cl_eigen.csv`, written by `RegionalPeaksBySpecificity/pipeline/1_Find_Peaks_By_Specificity.Rmd` line 1436 |
 
 ## Small tables kept with the code
 
@@ -72,7 +73,7 @@ Paths, Utilities and Imports sections, and it writes its plots under that notebo
 
 ## Inputs
 
-Paths are relative to `/jukebox/krienen`. A leading `...` stands for
+These are not in the repository. Paths are relative to `/jukebox/krienen`. A leading `...` stands for
 `marm_hmba_integration/250602_reprocess_and_recluster`.
 
 | Input | Used by |
@@ -81,7 +82,7 @@ Paths are relative to `/jukebox/krienen`. A leading `...` stands for
 | `.../data/rna/metacell_v2/subcortex/Cluster_v4_metacell.h5ad` | step 1 |
 | `.../metadata/subcortex_anno_table_archive/subcortex_anno_table_20251008.csv` | step 1 |
 | `.../metadata/subcortex_anno_table_archive/subcortex_anno_table_cluster_region_20251008.csv` (dominant region per cluster) | step 1 |
-| SCENIC+ `eRegulon_direct.tsv` and `eRegulons_extended.tsv` for neurons (output of `1_Preprocess/Multiomics/5_SCENIC_Plus`) | step 4 |
+| SCENIC+ `eRegulon_direct.tsv` and `eRegulons_extended.tsv` for neurons (output of `1_Preprocess/Multiomics/5_SCENIC_Plus`). `eRegulon_direct.tsv` is read from the copy in `3_Analysis/HPF_Gradient_Analysis/data/`. | step 4 |
 | Objects loaded by `../ATAC_Regulon_Analysis/combined_analysis/notebooks/1_combined_analysis.Rmd` | step 6 |
 
 ## Annotation versions
