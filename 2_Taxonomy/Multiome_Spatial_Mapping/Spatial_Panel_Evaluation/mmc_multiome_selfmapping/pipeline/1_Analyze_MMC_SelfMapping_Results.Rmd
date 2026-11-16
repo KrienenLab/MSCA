@@ -3168,25 +3168,3 @@ df_map_vs_deg %>%
 table(df_map_vs_deg$n_sep_deg)
 filter(df_map_vs_deg, n_sep_deg=="0")
 ```
-
-
-# Quick check StrioMat self-mapping
-
-```{r}
-pred_accuracy_table %>% 
-    filter(Subcortex_Group_v4 == "STRd D2 StrioMat Hybrid MSN")
-```
-
-```{r}
-pred_accuracy_table %>% 
-    filter(Subcortex_Group_v4 == "STRd D2 StrioMat Hybrid MSN") %>% 
-    write.csv("/Users/mike/Downloads/striomat_hybrid_self_mapping.csv", row.names=FALSE)
-```
-
-
-```{r}
-pred_accuracy_table %>% 
-    filter(prediction=="cluster_55")
-```
-
-
